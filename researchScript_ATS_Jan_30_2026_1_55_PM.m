@@ -71,10 +71,15 @@ r_s = 30/imgSz(1);  % spatial radius [pixels norm]
 % Set persistance variables
 gamma_trace = 0.5;
 
+% Thresholds
+similarity_threshold = 0;
+trace_threshold = 0;
+persistance_threshold = 0;
+
 % Set coherence weights
-coherence_s = 0.5;
-coherence_p = 0.3;
-coherence_t = 0.5;
+coherence_s = 1;
+coherence_p = 1;
+coherence_t = 1;
 
 % Set the coherence threshold
 coherence_threshold = 0.01;
@@ -88,7 +93,7 @@ surface_tau_max = 1.2;
 recency_T = 0.5;
 
 % Set the time interval to accumulate over
-t_interval = 0.033;  % [s]
+t_interval = 0.01;  % [s]
 t_total = max(tk);  % [s]
 frame_total = floor(t_total/t_interval);
 
@@ -293,33 +298,74 @@ for frameIndex = 1:frame_total
     % Reset the background to zero for visualization purposes
     norm_similarity_map(isnan(norm_similarity_map)) = 0;
 
+    % Calculate the persistance map
+    [rowsExists, colsExists] = find(norm_trace_map>0);
+    logPersistance = zeros(length(rowsExists),1);
+    persist_map = zeros(size(norm_trace_map));
+    
     if frameIndex == 1
-        persist_map = norm_trace_map;
     else
-        persist_map = gamma_trace .* norm_trace_map + ...
-                     (1-gamma_trace) .* persist_map_prev;
+        % for numValidIdx = 1:length(colsExists)
+        %     [closestRows, closestCols, sortedIdx,...
+        %         t_row, t_col, t_val, ...
+        %         b_rows, b_cols, b_vals, minDist] = coherence.findPersistence(norm_trace_map, ...
+        %         norm_trace_map_prev, imgSz, rowsExists(numValidIdx), colsExists(numValidIdx));
+        %     % plotting.visualizePersistance(t_row, t_col, t_val, ...
+        %     %             b_rows, b_cols, b_vals, sortedIdx);
+        %     logPersistance(numValidIdx) = minDist;
+        % end
+        % 
+        % % Map each minDist to its (row, col) in the new map
+        % persist_map(sub2ind(size(persist_map), ...
+        % rowsExists, colsExists)) = logPersistance;
+        rowsExists = rowsExists(:);
+        colsExists = colsExists(:);
+        
+        logPersistance = coherence.findPersistenceVectorized( ...
+            norm_trace_map, norm_trace_map_prev, imgSz, rowsExists, colsExists);
+
+        persist_map(sub2ind(size(persist_map), rowsExists, colsExists)) = logPersistance;
     end
-    persist_map_prev = persist_map;
+
+    norm_trace_map_prev = norm_trace_map;
+
+    % Invert persistance
+    inverted_persistance = 1./(persist_map + 1);
+    inverted_persistance(inverted_persistance==1)=0; 
 
     % Log normalize the persistance map
-    log_persist_map = log1p(persist_map); 
-    norm_persist_map = log_persist_map ./ max(log_persist_map(:));
+    log_persist_map = log1p(inverted_persistance); 
+    norm_persist_map = log_persist_map ./ max(log_persist_map(:));    
 
-    % Calculate the coherence map
-    coherence_map = ((1 .* norm_similarity_map) + ... 
-                (1 .* norm_trace_map + norm_persist_map)).*cleanMap;
+    % % Calculate the coherence map
+    % coherence_map = ((coherence_s .* norm_similarity_map) + ... 
+    %             (coherence_t .* norm_trace_map));
 
     % Use the coherence map to filter out the values
-    filtered_coherence_map = zeros(size(coherence_map));
-    coherence_mask = (coherence_map >= coherence_threshold);
-    filtered_coherence_map(coherence_mask) = t_max(coherence_mask);
+    filtered_similarity_map = zeros(size(norm_similarity_map));
+    filtered_trace_map = zeros(size(norm_trace_map));
+    filtered_persistance_map = zeros(size(norm_persist_map));
 
+    similarity_mask = (norm_similarity_map >= similarity_threshold);
+    trace_mask = (norm_trace_map >= trace_threshold);
+    persistance_mask = (norm_persist_map >= persist_map);
+
+    filtered_similarity_map(similarity_mask) = norm_similarity_map(similarity_mask);
+    filtered_trace_map(trace_mask) = norm_trace_map(trace_mask);
+    filtered_persistance_map(persistance_mask) = norm_persist_map(persistance_mask);
+
+    filtered_coherence_map = ((coherence_s .* filtered_similarity_map) + ... 
+                (coherence_t .* filtered_trace_map) +...
+                coherence_p .* filtered_persistance_map);
+
+    filtered_coherence_map(filtered_persistance_map>0.999 & filtered_trace_map < 0.1)=0;
+    filtered_coherence_map(filtered_coherence_map<=1.65)=0;
 
     % ----------------- ADAPTIVE TIME SURFACE UPDATE ---------------------%
     % --------------------------------------------------------------------%
 
     % Calculate the candidate decay time
-    candidate_tau_n = surface_k_tau.*max(t_max, eps).*cleanMap;
+    candidate_tau_n = surface_k_tau.*max(tk_diff_map, eps).*cleanMap;
 
     % Bound the candidate map
     candidate_tau_n(candidate_tau_n>surface_tau_max) = surface_tau_max;
@@ -347,7 +393,7 @@ for frameIndex = 1:frame_total
         decayed_surface = tau_current .*...
               exp(-t_interval./tau_current);
 
-        time_surface_map = decayed_surface;
+        time_surface_map = tau_current;
     end
     time_surface_map_prev = time_surface_map;
     tau_map_prev = tau_current;
