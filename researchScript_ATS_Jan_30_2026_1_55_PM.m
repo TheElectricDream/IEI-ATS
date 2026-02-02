@@ -24,8 +24,8 @@ hdf5_path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
     '/Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5/'];
 
 % Set dataset name
-file_name = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-%file_name = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+%file_name = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
+file_name = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
 
 % Load the data
 tk = double(h5read([hdf5_path file_name], '/timestamp'));
@@ -344,10 +344,10 @@ for frameIndex = 1:frame_total
 
         tau_current = (1 - beta_tau) .* tau_map_prev + beta_tau .* candidate_tau_n;
 
-        % decayed_surface = tau_current .*...
-        %      exp(-t_interval./tau_current);
+        decayed_surface = tau_current .*...
+              exp(-t_interval./tau_current);
 
-        time_surface_map = tau_current;
+        time_surface_map = decayed_surface;
     end
     time_surface_map_prev = time_surface_map;
     tau_map_prev = tau_current;
