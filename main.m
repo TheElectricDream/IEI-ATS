@@ -68,13 +68,13 @@ imgSz = [640, 480];
 % Define coherence constants
 r_s = 30/imgSz(1);  % spatial radius [pixels norm]
 
-% Set persistance variables
+% Set persistence variables
 gamma_trace = 0.5;
 
 % Thresholds
-similarity_threshold = 0;
-trace_threshold = 0;
-persistance_threshold = 0;
+similarity_threshold = 0.8;
+trace_threshold = 0.069;
+persistence_threshold = 0.002;
 
 % Set coherence weights
 coherence_s = 1;
@@ -86,7 +86,7 @@ coherence_threshold = 0.01;
 
 % Set time-surface parameters
 surface_k_tau = 1.0;
-surface_tau_min = 0.1;
+surface_tau_min = 0.001;
 surface_tau_max = 1.2;
 
 % Set recency time constant
@@ -103,7 +103,7 @@ cohOut = false;
 atsOut = true;
 
 % Initialize the videos
-[hFigs, hAxs, hImgs, videoWriters] = plotting.initializeEventVideos(cohOut, atsOut, imgSz);
+[hFigs, hAxs, hImgs, videoWriters] = plot.initializeEventVideos(cohOut, atsOut, imgSz);
 
 %% Initialize data storage and perform data optimization before algorithm
 % Identify number of events
@@ -162,10 +162,10 @@ for frameIndex = 1:frame_total
         sorted_y = y_valid(sort_order);
 
         % Reset the frames for the current loop
-        t_diff = nan(imgSz);
-        t_max = nan(imgSz);
-        t_min = nan(imgSz);
-        t_std = nan(imgSz);
+        t_mean = zeros(imgSz);
+        t_max = zeros(imgSz);
+        t_min = zeros(imgSz);
+        t_std = zeros(imgSz);
         sum_exp_dist_map = zeros(imgSz);
         counts = zeros(imgSz);
         
@@ -212,36 +212,30 @@ for frameIndex = 1:frame_total
             val_chunk_t = sorted_t(pos(k):group_ends(k));
             val_chunk_exp = sum_exp_event(pos(k):group_ends(k));
             idx = unique_idx(k);
-            t_diff(idx) = mean(diff(val_chunk_t));
+            t_mean(idx) = mean(val_chunk_t);
             t_max(idx) = max(val_chunk_t);
             t_min(idx) = min(val_chunk_t);
-            t_std(idx) = std(val_chunk_t);
+            t_std(idx) = std(val_chunk_t,"omitmissing");
             sum_exp_dist_map(idx) = max(val_chunk_exp);
         end
+
+        % Remove events which are not consistant enough in space
+        % trace_mask = (sum_exp_dist_map <= trace_threshold);
+        % sum_exp_dist_map(trace_mask) = 0;
         
         % Normalize the trace map by calculating the LOG first, then
         % normalizing it
         log_trace_map = log1p(sum_exp_dist_map'); 
         norm_trace_map = log_trace_map' ./ max(log_trace_map(:));
-       
-        % Calculate the actual mean (range / (N-1)). This is the average of
-        % the current map, but if we want to get the moving average accross
-        % % the frames we will need to do a bit more work
-        % t_max(isnan(t_max))=0;
-        % t_min(isnan(t_min))=0;
-        % tk_diff_map = (t_max - t_min) ./ (counts - 1);
-        tk_diff_map = t_diff;
-        tk_diff_map(isinf(tk_diff_map)) = NaN;
-        tk_diff_map(isnan(tk_diff_map)) = 0.0;
-
+      
         % Reset statistics maps
         cv_map = zeros(imgSz);
         cv_values = zeros(imgSz);
         regularity_map = zeros(imgSz);
         
         % Calculate the coefficient of variation map
-        mask = tk_diff_map ~= 0;
-        cv_values(mask) = t_std(mask) ./ tk_diff_map(mask);
+        mask = t_mean ~= 0;
+        cv_values(mask) = t_std(mask) ./ t_mean(mask);
         cv_map = max(cv_map, cv_values);
 
         % Also calculate the inverse as this is more representative of
@@ -250,31 +244,11 @@ for frameIndex = 1:frame_total
         regularity_map(regularity_map==1)=0; 
 
     else
-        tk_diff_map = nan(imgSz);
+
+        t_mean = nan(imgSz);
 
     end   
 
-    % Discretize the event array into voxels so that convolutions can
-    % be applied
-    opts_voxel.dx = 1.0;
-    opts_voxel.dy = 1.0;
-    opts_voxel.dt = t_interval;
-    [Vocc, xEdges, yEdges, tEdges] = voxelization.discretizeEventsToVoxels(sorted_x, ...
-        sorted_y, sorted_t, opts_voxel);
-
-    % 3D convolution on the voxel volume
-    h = ones(3,3,3,'single')/8;                 
-    Vsm = convn(single(Vocc), h, 'same');        
-
-    % Remove disconnected regions
-    cleanVsm = bwareaopen(Vsm, 2);
-
-    % Create a clean map
-    cleanMap = (Vsm(:,:,1) + Vsm(:,:,2));
-
-    % Keep above 0.5
-    cleanMap(cleanMap<0.5)=0;
-    cleanMap(cleanMap>=0.5)=1;
     
     % Convert the map to a mesh for additional processing
     [normalized_cv_point_cloud] = process.generateMeshFromFrame(regularity_map');
@@ -291,6 +265,10 @@ for frameIndex = 1:frame_total
         sorted_x);
     similarity_map(linear_idx_cv_map) = similarity_score;
 
+    % Remove events which do not meet the similarity criteria
+    % similarity_mask = (similarity_map <= similarity_threshold);
+    % similarity_map(similarity_mask) = 0;
+
     % Log normalize the similarity map
     log_similarity_map = log1p(similarity_map-min(similarity_map(:))); 
     norm_similarity_map = log_similarity_map' ./ max(log_similarity_map(:));
@@ -298,74 +276,61 @@ for frameIndex = 1:frame_total
     % Reset the background to zero for visualization purposes
     norm_similarity_map(isnan(norm_similarity_map)) = 0;
 
-    % Calculate the persistance map
-    [rowsExists, colsExists] = find(norm_trace_map>0);
-    logPersistance = zeros(length(rowsExists),1);
-    persist_map = zeros(size(norm_trace_map));
-    
-    if frameIndex == 1
-    else
-        % for numValidIdx = 1:length(colsExists)
-        %     [closestRows, closestCols, sortedIdx,...
-        %         t_row, t_col, t_val, ...
-        %         b_rows, b_cols, b_vals, minDist] = coherence.findPersistence(norm_trace_map, ...
-        %         norm_trace_map_prev, imgSz, rowsExists(numValidIdx), colsExists(numValidIdx));
-        %     % plotting.visualizePersistance(t_row, t_col, t_val, ...
-        %     %             b_rows, b_cols, b_vals, sortedIdx);
-        %     logPersistance(numValidIdx) = minDist;
-        % end
-        % 
-        % % Map each minDist to its (row, col) in the new map
-        % persist_map(sub2ind(size(persist_map), ...
-        % rowsExists, colsExists)) = logPersistance;
-        rowsExists = rowsExists(:);
-        colsExists = colsExists(:);
-        
-        logPersistance = coherence.findPersistenceVectorized( ...
-            norm_trace_map, norm_trace_map_prev, imgSz, rowsExists, colsExists);
+    % Remove 
 
-        persist_map(sub2ind(size(persist_map), rowsExists, colsExists)) = logPersistance;
+    % Calculate the persistence map
+    [rowsExists, colsExists] = find(norm_trace_map>0);
+
+    if frameIndex == 1
+        logpersistence = zeros(length(rowsExists),1);
+        persist_map = norm_trace_map;
+    else
+        % Reset maps
+        logpersistence = zeros(length(rowsExists),1);
+        persist_map = zeros(size(norm_trace_map));
+
+        % Assess persistence across frames
+        [~, ~, minDists, validIdx] = coherence.findPersistenceVectorized(norm_trace_map, norm_trace_map_prev, imgSz);
+        % Assign results directly to the map
+        if ~isempty(validIdx)
+            persist_map(validIdx) = minDists;
+        end
     end
 
     norm_trace_map_prev = norm_trace_map;
 
-    % Invert persistance
-    inverted_persistance = 1./(persist_map + 1);
-    inverted_persistance(inverted_persistance==1)=0; 
+    if frameIndex ~= 1
+        % Remove events which are not persistent
+        % persistence_mask = (persist_map >= persistence_threshold);
+        % persist_map(persistence_mask) = 0;
+        % persistence_mask = (persist_map >= persistence_threshold);
+        % persist_map(persistence_mask) = 0;
+    end
 
-    % Log normalize the persistance map
-    log_persist_map = log1p(inverted_persistance); 
+    % Invert persistence
+    inverted_persistence = 1./(persist_map + 1);
+    inverted_persistence(inverted_persistence==1)=0; 
+
+    % Log normalize the persistence map
+    log_persist_map = log1p(inverted_persistence); 
     norm_persist_map = log_persist_map ./ max(log_persist_map(:));    
 
     % % Calculate the coherence map
     % coherence_map = ((coherence_s .* norm_similarity_map) + ... 
     %             (coherence_t .* norm_trace_map));
 
-    % Use the coherence map to filter out the values
-    filtered_similarity_map = zeros(size(norm_similarity_map));
-    filtered_trace_map = zeros(size(norm_trace_map));
-    filtered_persistance_map = zeros(size(norm_persist_map));
+    filtered_coherence_map = ((coherence_s .* norm_similarity_map) .* ... 
+                (coherence_t .* norm_trace_map) .*...
+                coherence_p .* norm_persist_map);
 
-    similarity_mask = (norm_similarity_map >= similarity_threshold);
-    trace_mask = (norm_trace_map >= trace_threshold);
-    persistance_mask = (norm_persist_map >= persist_map);
-
-    filtered_similarity_map(similarity_mask) = norm_similarity_map(similarity_mask);
-    filtered_trace_map(trace_mask) = norm_trace_map(trace_mask);
-    filtered_persistance_map(persistance_mask) = norm_persist_map(persistance_mask);
-
-    filtered_coherence_map = ((coherence_s .* filtered_similarity_map) + ... 
-                (coherence_t .* filtered_trace_map) +...
-                coherence_p .* filtered_persistance_map);
-
-    filtered_coherence_map(filtered_persistance_map>0.999 & filtered_trace_map < 0.1)=0;
-    filtered_coherence_map(filtered_coherence_map<=1.65)=0;
+    % filtered_coherence_map(filtered_persistence_map>0.999 & filtered_trace_map < 0.1)=0;
+    % filtered_coherence_map(filtered_coherence_map<=1.65)=0;
 
     % ----------------- ADAPTIVE TIME SURFACE UPDATE ---------------------%
     % --------------------------------------------------------------------%
 
     % Calculate the candidate decay time
-    candidate_tau_n = surface_k_tau.*max(tk_diff_map, eps).*cleanMap;
+    candidate_tau_n = surface_k_tau.*max(t_mean, eps);
 
     % Bound the candidate map
     candidate_tau_n(candidate_tau_n>surface_tau_max) = surface_tau_max;
@@ -388,27 +353,29 @@ for frameIndex = 1:frame_total
     else
         beta_tau = 0.1;
 
-        tau_current = (1 - beta_tau) .* tau_map_prev + beta_tau .* candidate_tau_n;
+        decayed_surface = filtered_coherence_map .*...
+              exp(-t_interval./candidate_tau_n);
 
-        decayed_surface = tau_current .*...
-              exp(-t_interval./tau_current);
+        time_surface_map = (1 - beta_tau) .* time_surface_map_prev + beta_tau .* decayed_surface;
 
-        time_surface_map = tau_current;
     end
     time_surface_map_prev = time_surface_map;
     tau_map_prev = tau_current;
 
     % Update the last event timestamp
-    last_event_timestamp = t_max.*cleanMap;
+    last_event_timestamp = t_mean;
 
     % Normalize the time surface map
     log_time_surface_map = log1p(time_surface_map);
     norm_log_time_surface_map = log_time_surface_map ./ max(log_time_surface_map(:));
     min_log_time_surface_map = min(norm_log_time_surface_map(:));
-    norm_log_time_surface_map = norm_log_time_surface_map-min_log_time_surface_map;
+    norm_log_time_surface_map = norm_log_time_surface_map-min_log_time_surface_map;       
+
+    % Remove disconnected regions
+    cleanVsm = bwareaopen((norm_log_time_surface_map>0), 2);
     
     % Convert to uint8 (0-255 range)
-    mapdatauint8 = uint8(norm_log_time_surface_map .* 255);
+    mapdatauint8 = uint8(norm_log_time_surface_map .* cleanVsm .* 255);
     %mapdatauint8_gauss = imgaussfilt(mapdatauint8, 3.0,"FilterSize",3);
 
     % Apply a Gaussian filter to help smooth out the final image
