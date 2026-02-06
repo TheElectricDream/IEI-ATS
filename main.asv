@@ -111,7 +111,6 @@ frame_time      = zeros(frame_total, 1);
 % Initialize per-pixel timestamp tracking
 last_event_timestamp    = zeros(imgSz);
 norm_trace_map_prev     = zeros(imgSz);
-time_surface_map_prev   = zeros(imgSz);
 
 % Initialize Nunes algorithm constants (Optional)
 % The Adaptive Decay method requires persistent state for every pixel
@@ -219,58 +218,50 @@ for frameIndex = 1:frame_total
     % --------------------------------------------------------------------%
     
     [time_surface_map, tau_filtered, decayed_surface] = ...
-    accumulator.localAdaptiveTimeSurface(t_mean, last_event_timestamp,...
-    filtered_coherence_map, time_surface_map_prev, frameIndex, surface_k_tau, ...
-    surface_tau_max, surface_tau_min, recency_T, filter_mask, norm_trace_map);
+    localAdaptiveTimeSurface(t_mean, last_event_timestamp,...
+    filtered_coherence_map, time_surface_map_prev, frameIndex)
 
-    % Set any retention variables
+    % Store history
     time_surface_map_prev = time_surface_map;
+    tau_map_prev = tau_current;
 
     % Update the last event timestamp
     last_event_timestamp = max(t_mean, eps);
 
-    % Normalize the time surface map for viewing
-    log_time_surface_map = log1p(time_surface_map);
-    normalized_output_frame = log_time_surface_map ./ ...
-        max(log_time_surface_map(:));    
-
-    % ----------------- NUNES GLOBAL ADAPTIVE UPDATE ---------------------%
-    % --------------------------------------------------------------------%
-
     % % Use Nunes global accumulator
-    % [nunes_activity_map, G_activity, G_last_t] = ...
-    % accumulator.nunesGlobalAdaptive(sorted_t, group_ends,...
+    % [nunes_activity_map, G_activity, G_last_t] = accumulator.nunesGlobalAdaptive(sorted_t, group_ends,...
     %     unique_idx, pos, G_activity, G_last_t);
     % 
     % % Normalize the time surface map
     % log_nunes_activity_map = log1p(nunes_activity_map);
-    % normalized_output_frame = log_nunes_activity_map ./ ...
-    % max(log_nunes_activity_map(:));    
+    % norm_log_nunes_activity_map = log_nunes_activity_map ./ max(log_nunes_activity_map(:));    
 
-    % ------------------------ EXPORTING VIDEO ---------------------------%
-    % --------------------------------------------------------------------%
+    % Normalize the time surface map
+    log_time_surface_map = log1p(time_surface_map);
+    norm_log_time_surface_map = log_time_surface_map ./ max(log_time_surface_map(:));    
 
     % Convert to uint8 (0-255 range)
-    grayscale_normalized_output_frame = ...
-        uint8(normalized_output_frame .* 255);
+    mapdatauint8 = uint8(norm_log_time_surface_map .* 255);
 
     % Apply a Gaussian filter to help smooth out the final image
     if filter_image 
-         grayscale_normalized_output_frame = ...
-             imgaussfilt(grayscale_normalized_output_frame, 3.0,"FilterSize",3); %#ok<UNRCH>
+         mapdatauint8 = imgaussfilt(mapdatauint8, 3.0,"FilterSize",3); %#ok<UNRCH>
     end
+
+    % ------------------------ EXPORTING VIDEO ---------------------------%
+    % --------------------------------------------------------------------%
 
     % Log processing time
     frame_time(frameIndex) = toc;
 
     if atsOut
         % Capture the frame
-        set(hImgs{1}, 'CData', grayscale_normalized_output_frame');
-        set(hImgs{1}, 'AlphaData', ~isnan(grayscale_normalized_output_frame'));
+        set(hImgs{1}, 'CData', mapdatauint8');
+        set(hImgs{1}, 'AlphaData', ~isnan(mapdatauint8'));
         set(hAxs{1}, 'Visible','off');
         colormap(gray);
         clim([0 255]);
-        writeVideo(videoWriters{1}, grayscale_normalized_output_frame'); %getframe(hFigs{1}));
+        writeVideo(videoWriters{1}, mapdatauint8'); %getframe(hFigs{1}));
     end
 
     % if cohOut
