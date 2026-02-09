@@ -130,14 +130,16 @@ function [t_mean, t_max, t_min, t_std, norm_trace_map, norm_similarity_map, ...
     %             (coherence_t .* norm_trace_map) .*...
     %             coherence_p .* norm_persist_map);
 
-    % opts.dx = 1;
-    % opts.dy = 1;
-    % opts.dt = t_interval;
-    % [voxelOccupancy, ~, ~,...
-    % ~] = voxelization.discretizeEventsToVoxels(sorted_x, sorted_y, sorted_t, opts);
-    % voxelCleanMap = bwareaopen(voxelOccupancy, 10);
-    % cleanMap = voxelCleanMap(:,:,1)+voxelCleanMap(:,:,2);
+    opts.dx = 1;
+    opts.dy = 1;
+    opts.dt = t_interval;
+    [voxelOccupancy, ~, ~,...
+    ~] = voxelization.discretizeEventsToVoxels(sorted_x, sorted_y, sorted_t, opts);
+    voxelCleanMap = bwareaopen(voxelOccupancy, 10);
 
-    filtered_coherence_map = (norm_trace_map .* norm_persist_map);
+
+    cleanMap = voxelCleanMap(:,:,1)+voxelCleanMap(:,:,2);
+
+    filtered_coherence_map = (norm_trace_map .* norm_persist_map).*cleanMap;
 
 end

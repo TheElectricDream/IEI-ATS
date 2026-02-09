@@ -14,8 +14,8 @@ close all;
 
 %% Define processing range
 % Define start and end time to process [seconds]
-t_start_process = 60; 
-t_end_process   = 120; 
+t_start_process = 1; 
+t_end_process   = 240; 
 
 %% Import events for inspection
 
@@ -68,30 +68,42 @@ imgSz                       = [640, 480];
 % Define coherence constants
 r_s                         = 30/imgSz(1);  % spatial radius [pixels norm]
 
-% Set persistence variables
-gamma_trace                 = 0.5;
-
 % Thresholds
-similarity_threshold        = 0.8;
+similarity_threshold        = 0.7;
 trace_threshold             = 0.0;
 persistence_threshold_high  = 0.0001;
 persistence_threshold_low   = 0.00001;
-
-% Set the coherence threshold
-coherence_threshold         = 0.01;
 
 % Set time-surface parameters
 surface_k_tau               = 1.0;
 surface_tau_min             = 0.001;
 surface_tau_max             = 1.2;
 
-% Set recency time constant
-recency_T                   = 0.5;
+% Standard time surface
+sae_t_map = -inf(imgSz); 
+sae_p_map = zeros(imgSz);
+
+% Decay constant for the visual 
+sae_tau = 0.1; % [seconds]
+
 
 % Set the time interval to accumulate over
-t_interval                  = 0.033;  % [s]
+t_interval                  = 0.3;  % [s]
 t_total                     = max(tk);  % [s]
 frame_total                 = floor(t_total/t_interval);
+
+% SITS (Speed Invariant) Initialization
+sits_t_map = -inf(imgSz);
+sits_p_map = zeros(imgSz);
+
+% Initialize tau_map with a default "slow" decay 
+% so the first events don't vanish instantly.
+default_tau = 0.1; 
+sits_tau_map = ones(imgSz) * default_tau;
+
+% Parameter K (Scaling factor)
+% K = 3 means the trail lasts for 3x the inter-event interval.
+sits_k = 3.0;
 
 %% Initialize all figure code for video output
 % Indicate which videos should be saved
@@ -113,13 +125,9 @@ last_event_timestamp    = zeros(imgSz);
 norm_trace_map_prev     = zeros(imgSz);
 time_surface_map_prev   = zeros(imgSz);
 
-% Initialize Nunes algorithm constants (Optional)
-% The Adaptive Decay method requires persistent state for every pixel
-% Initialize Global Activity Map (a0)
-G_activity = zeros(imgSz); 
-
-% Initialize Global Timestamp Map (t0)
-G_last_t = zeros(imgSz); 
+% Initialize Nunes algorithm constants
+params.tau_N = 10000; % Decay constant (Number of Global Events).
+state = []; % Initialize empty state
 
 %% Data processing starting point
 % Loop through the figures to capture each frame
@@ -137,8 +145,8 @@ for frameIndex = 1:frame_total
     % nunes_activity_map = G_activity; 
 
     % Slice the events to a valid range
-    [current_idx, x_valid, y_valid, t_valid] = ...
-    process.sliceToValidRange(t_range_n, xk, yk, tk, imgSz, current_idx);
+    [current_idx, x_valid, y_valid, t_valid, p_valid] = ...
+    process.sliceToValidRange(t_range_n, xk, yk, tk, pk, imgSz, current_idx);
 
     % Confirm the presence of valid events in the packet
     % If no events are present, we skip this frame
@@ -147,7 +155,7 @@ for frameIndex = 1:frame_total
         fprintf('There are no events in this slice, skipping... \n');
         continue;
         
-    end
+    end   
 
     % ---------------------- EVENT PREPERATION------------------------%
     % ----------------------------------------------------------------%
@@ -159,7 +167,7 @@ for frameIndex = 1:frame_total
     % each house. So going forward, (3,5) might just be "House #1".
     % Programatically this just means that (1,1) is "1", (1,2) is "2".
     % So you will have a list at the end which is of size x*y. In this
-    % case with a frame of size 480 by 640, the MAXIMUM size of the list
+    % case with a frame of size 640 by 480, the MAXIMUM size of the list
     % is 307,200. However the practical size of the list will change as
     % not every pixel is active.
     linear_idx = sub2ind(imgSz, x_valid, y_valid);
@@ -173,6 +181,7 @@ for frameIndex = 1:frame_total
     sorted_t = t_valid(sort_order);
     sorted_x = x_valid(sort_order);
     sorted_y = y_valid(sort_order);
+    sorted_p = p_valid(sort_order);
 
     % Reset the frames for the current loop
     counts = zeros(imgSz);
@@ -202,50 +211,88 @@ for frameIndex = 1:frame_total
     % ---------------------- EVENT COHERENCE -------------------------%
     % ----------------------------------------------------------------%
 
-    [t_mean, t_max, t_min, t_std, norm_trace_map, norm_similarity_map, ...
-    norm_persist_map, filtered_coherence_map] = ...
-    coherence.findCoherentEvents(sorted_x, sorted_y, sorted_t ,...
-    imgSz, r_s, t_interval, unique_idx, pos, group_ends,...
-    trace_threshold, similarity_threshold, persistence_threshold_high, ...
-    persistence_threshold_low, frameIndex, norm_trace_map_prev);
+    % [t_mean, t_max, t_min, t_std, norm_trace_map, norm_similarity_map, ...
+    % norm_persist_map, filtered_coherence_map] = ...
+    % coherence.findCoherentEvents(sorted_x, sorted_y, sorted_t ,...
+    % imgSz, r_s, t_interval, unique_idx, pos, group_ends,...
+    % trace_threshold, similarity_threshold, persistence_threshold_high, ...
+    % persistence_threshold_low, frameIndex, norm_trace_map_prev);
+    % 
+    % % Set any retention variables
+    % norm_trace_map_prev = norm_trace_map;
+    % 
+    % % Extract filter mask
+    % filter_mask = (filtered_coherence_map>0.00);   
+    % 
+    % % Blur mask
+    % filter_mask = imgaussfilt(filter_mask.*1, 3.0, "FilterSize", 9);
 
-    % Set any retention variables
-    norm_trace_map_prev = norm_trace_map;
-
-    % Extract filter mask
-    filter_mask = (filtered_coherence_map>0);   
-
-    % ----------------- ADAPTIVE TIME SURFACE UPDATE ---------------------%
+    % ----------------- ADAPTIVE TIME-SURFACE UPDATE ---------------------%
     % --------------------------------------------------------------------%
     
-    [time_surface_map, tau_filtered, decayed_surface] = ...
-    accumulator.localAdaptiveTimeSurface(t_mean, last_event_timestamp,...
-    filtered_coherence_map, time_surface_map_prev, frameIndex, surface_k_tau, ...
-    surface_tau_max, surface_tau_min, recency_T, filter_mask, norm_trace_map);
-
-    % Set any retention variables
-    time_surface_map_prev = time_surface_map;
-
-    % Update the last event timestamp
-    last_event_timestamp = max(t_mean, eps);
-
-    % Normalize the time surface map for viewing
-    log_time_surface_map = log1p(time_surface_map);
-    normalized_output_frame = log_time_surface_map ./ ...
-        max(log_time_surface_map(:));    
-
-    % ----------------- NUNES GLOBAL ADAPTIVE UPDATE ---------------------%
-    % --------------------------------------------------------------------%
-
-    % % Use Nunes global accumulator
-    % [nunes_activity_map, G_activity, G_last_t] = ...
-    % accumulator.nunesGlobalAdaptive(sorted_t, group_ends,...
-    %     unique_idx, pos, G_activity, G_last_t);
+    % % Ensure polarity is -1 and 1 (if it's 0 and 1)
+    % p_signed = double(p_valid);
+    % p_signed(p_signed == 0) = -1;
     % 
-    % % Normalize the time surface map
-    % log_nunes_activity_map = log1p(nunes_activity_map);
-    % normalized_output_frame = log_nunes_activity_map ./ ...
-    % max(log_nunes_activity_map(:));    
+    % % Accumulate polarity into a 2D grid
+    % % If multiple events land on one pixel, we sum their polarities (e.g., +1 +1 -1 = +1)
+    % polarity_map = accumarray([x_valid, y_valid], p_signed, imgSz, @sum, 0);
+    % 
+    % [normalized_output_frame, time_surface_map, tau_filtered, decayed_surface] = ...
+    % accumulator.localAdaptiveTimeSurface(t_mean, last_event_timestamp,...
+    % time_surface_map_prev, frameIndex, surface_k_tau, ...
+    % surface_tau_max, surface_tau_min, filter_mask,...
+    % polarity_map);
+    % 
+    % % Set any retention variables
+    % time_surface_map_prev = time_surface_map;
+    % 
+    % % Update the last event timestamp
+    % last_event_timestamp = max(t_max, eps);
+    % 
+    % % % Normalize the time surface map for viewing
+    % % log_time_surface_map = log1p(time_surface_map);
+    % % normalized_output_frame = log_time_surface_map ./ ...
+    % %     max(log_time_surface_map(:));  
+
+    % ----------------- NUNES GLOBAL ADAPTIVE ACCUMULATION----------------%
+    % --------------------------------------------------------------------%
+    
+    % [normalized_output_frame, state] = ...
+    %     accumulator.nunesGlobalAdaptive(x_valid, y_valid, p_valid, imgSz,...
+    %     state, params);
+
+    % ----------------- LEAKY TIME-SURFACE ACCUMULATION ------------------%
+    % --------------------------------------------------------------------%
+    
+    % % Define "Current Time" for this frame (end of the window)
+    % t_now = t_range_n; 
+    % 
+    % % Update the surface and get the visualization
+    % [normalized_output_frame, sae_t_map, sae_p_map] = ...
+    %     accumulator.standardTimeSurface(sae_t_map, sae_p_map, ...
+    %     x_valid, y_valid, t_valid, p_valid, ...
+    %     imgSz, t_now, sae_tau);
+    % 
+    % % Note: normalized_output_frame is now between -1 and 1.
+    % % For visualization as a grayscale image (0-255), we typically shift it.
+    % % 0.5 becomes "gray" (no event), 1 is White (On), 0 is Black (Off).
+    % 
+    % % Remap [-1, 1] -> [0, 1] for the video writer
+    % normalized_output_frame = (normalized_output_frame + 1) / 2;
+
+    % ----------------- SPEED INVARIENT TIME-SURFACE ACCUMULATION ------------------%
+    % --------------------------------------------------------------------%
+    
+    t_now = t_range_n;
+
+    [normalized_output_frame, sits_t_map, sits_tau_map, sits_p_map] = ...
+        accumulator.speedInvariantTimeSurface(sits_t_map, sits_tau_map, ...
+        sits_p_map, x_valid, y_valid, t_valid, p_valid, ...
+        imgSz, t_now, sits_k);
+        
+    % Remap to 0-1 for video
+    normalized_output_frame = (normalized_output_frame + 1) / 2;
 
     % ------------------------ EXPORTING VIDEO ---------------------------%
     % --------------------------------------------------------------------%
@@ -257,7 +304,8 @@ for frameIndex = 1:frame_total
     % Apply a Gaussian filter to help smooth out the final image
     if filter_image 
          grayscale_normalized_output_frame = ...
-             imgaussfilt(grayscale_normalized_output_frame, 3.0,"FilterSize",3); %#ok<UNRCH>
+             imgaussfilt(grayscale_normalized_output_frame, ...
+             3.0,"FilterSize",3); %#ok<UNRCH>
     end
 
     % Log processing time
