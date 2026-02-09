@@ -1,50 +1,45 @@
 function [visual_surface, last_t_map, last_p_map] = ...
     standardTimeSurface(last_t_map, last_p_map, x, y, t, p, ...
     imgSz, t_current, tau)
-% standardTimeSurface Generates a Time Surface (SAE) with motion blur.
+% STANDARDTIMESURFACE Generates a Time Surface using Linear Decay (SAE).
+%
+%   Unlike exponential decay (which never truly hits zero), this method
+%   linearly maps the event age to intensity.
+%   - Event happening NOW = 1.0
+%   - Event happening 'tau' seconds ago = 0.0
+%   - Events older than 'tau' = 0.0 (Hard cutoff)
 %
 %   INPUTS:
-%   last_t_map  - (Height x Width) Map of the timestamps of the last events.
-%   last_p_map  - (Height x Width) Map of the polarity of the last events.
-%   x, y, t, p  - Vectors of event data for the current packet.
-%   imgSz       - Size of the image [Height, Width].
-%   t_current   - The current simulation time (usually max(t) of packet).
-%   tau         - Time constant [seconds] for the visual decay (motion blur).
-%
-%   OUTPUTS:
-%   visual_surface - The visualization frame [-1 to 1] with exponential decay.
-%   last_t_map     - Updated timestamp map.
-%   last_p_map     - Updated polarity map.
+%   tau - Acts as the "Window Size" or "Memory Horizon" (not a half-life).
 
-    % 1. Update the Global State Maps
-    % We only care about the *last* event at each pixel in this packet.
-    % Since x, y, t are sorted by time, we can just write them sequentially.
-    % However, using linear indices is faster and handles overwrites automatically.
-    
+    % Update the Global State Maps
     linear_idx = sub2ind(imgSz, x, y);
     
-    % Update timestamps (latest event overwrites previous ones at same pixel)
+    % Update timestamps (latest event overwrites previous ones)
     last_t_map(linear_idx) = t;
     
-    % Update polarities (preserve the polarity of the last event)
-    % Ensure polarity is signed (-1, 1)
+    % Update polarities
     p_signed = double(p);
     p_signed(p_signed == 0) = -1;
     last_p_map(linear_idx) = p_signed;
 
-    % 2. Calculate the Time Surface (Motion Blur)
-    % Formula: S(x,y) = Polarity * exp( - (t_now - t_last) / tau )
+    % Calculate Linear Decay Surface
     
-    % Calculate time delta
-    dt_map = t_current - last_t_map;
+    % Calculate Age: How long ago did the event happen?
+    age_map = t_current - last_t_map;
     
-    % Handle potential negative times (if t_current < t_last due to slice issues)
-    dt_map(dt_map < 0) = 0;
+    % Handle potential negative times (safety for sorting issues)
+    age_map(age_map < 0) = 0;
     
-    % Calculate exponential decay value (0 to 1)
-    decay_value = exp(-dt_map / tau);
+    % LINEAR DECAY FORMULA
+    % Value = 1.0 - (Age / Horizon)
+    % This creates a straight line from White (now) to Black (tau seconds ago)
+    decay_value = 1 - (age_map / tau);
     
-    % Apply polarity
+    % Clip values: Anything older than 'tau' becomes exactly 0 (Black)
+    decay_value(decay_value < 0) = 0;
+    
+    % Apply polarity (-1 to 1 range)
     visual_surface = last_p_map .* decay_value;
-
+    
 end

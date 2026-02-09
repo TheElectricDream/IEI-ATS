@@ -114,6 +114,33 @@ function [t_mean, t_max, t_min, t_std, norm_trace_map, norm_similarity_map, ...
         persist_map(persist_map>persistence_threshold_high)=nan;
     end
     
+    % % [Existing code]
+    % valid_persist = persist_map(persist_map > 0);
+    % 
+    % % Iterative clipping parameters
+    % max_iter = 50;
+    % sigma_mult = 2.5; % Tunable: strictness of the filter
+    % 
+    % for i = 1:max_iter
+    %     mu = mean(valid_persist);
+    %     sigma = std(valid_persist);
+    % 
+    %     cutoff = mu + (sigma_mult * sigma);
+    % 
+    %     % Check if we need to filter
+    %     new_valid = valid_persist(valid_persist <= cutoff);
+    % 
+    %     % Break if converged (no new items removed)
+    %     if length(new_valid) == length(valid_persist)
+    %         break;
+    %     end
+    %     valid_persist = new_valid;
+    % end
+    % 
+    % adaptive_threshold = cutoff;
+    % 
+    % % Apply
+    % persist_map(persist_map > adaptive_threshold) = NaN;
     % % Invert persistence
     % inverted_persistence = 1./(persist_map + 1);
     % inverted_persistence(inverted_persistence==1)=0; 
@@ -137,8 +164,8 @@ function [t_mean, t_max, t_min, t_std, norm_trace_map, norm_similarity_map, ...
     ~] = voxelization.discretizeEventsToVoxels(sorted_x, sorted_y, sorted_t, opts);
     voxelCleanMap = bwareaopen(voxelOccupancy, 10);
 
-
     cleanMap = voxelCleanMap(:,:,1)+voxelCleanMap(:,:,2);
+    cleanMap = imgaussfilt(cleanMap.*1, 5.0, "FilterSize", 9);
 
     filtered_coherence_map = (norm_trace_map .* norm_persist_map).*cleanMap;
 
