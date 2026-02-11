@@ -1,8 +1,8 @@
-function [last_t_map, decayed_surface] = timeSurface(last_t_map, x, y, t, imgSz, ts_time_constant)
+function [last_t_map, normalized_output_frame] = timeSurface(last_t_map, x, y, t, imgSz, ts_time_constant)
 %timeSurface Update timestamp map and compute exponential decayed surface.
-%   [LAST_T_MAP, DECAYED_SURFACE] = TIMESURFACE(LAST_T_MAP, X, Y, T, IMGSZ, TS_TIME_CONSTANT)
+%   [LAST_T_MAP, NORMALIZED_OUTPUT_FRAME] = TIMESURFACE(LAST_T_MAP, X, Y, T, IMGSZ, TS_TIME_CONSTANT)
 %   updates the timestamp map LAST_T_MAP at coordinates (X,Y) with timestamps T
-%   and returns the exponential decayed surface DECAYED_SURFACE computed using
+%   and returns the normalized exponential decayed surface NORMALIZED_OUTPUT_FRAME computed using
 %   time constant TS_TIME_CONSTANT. IMGSZ is the image size used for indexing.
 %
 %   Inputs:
@@ -45,4 +45,7 @@ function [last_t_map, decayed_surface] = timeSurface(last_t_map, x, y, t, imgSz,
 
     % Calculate the actual surface
     decayed_surface = exp(-(t_now - last_t_map) / ts_time_constant);
+    
+    % Normalize the surface
+    normalized_output_frame = (decayed_surface + 1) / 2;
 end
