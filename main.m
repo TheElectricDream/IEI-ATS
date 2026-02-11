@@ -15,7 +15,7 @@ close all;
 %% Define processing range
 % Define start and end time to process [seconds]
 t_start_process = 0; 
-t_end_process   = 240; 
+t_end_process   = 500; 
 
 %% Import events for inspection
 
@@ -83,14 +83,13 @@ surface_tau_min             = 0.001;
 surface_tau_max             = 1.2;
 
 % Standard time surface
-sae_t_map = -inf(imgSz); 
-sae_p_map = zeros(imgSz);
+ts_t_map = -inf(imgSz); 
 
 % Decay constant for the visual 
-sae_tau = 1; % [seconds]
+ts_time_constant = 0.05;  % [seconds]
 
 % Set the time interval to accumulate over
-t_interval                  = 0.33;  % [s]
+t_interval                  = 0.033;  % [s]
 t_total                     = max(tk);  % [s]
 frame_total                 = floor(t_total/t_interval);
 
@@ -213,58 +212,53 @@ for frameIndex = 1:frame_total
     % ---------------------- EVENT COHERENCE -------------------------%
     % ----------------------------------------------------------------%
 
-    [t_mean, t_max, t_min, t_std, norm_trace_map, norm_similarity_map, ...
-    norm_persist_map, filtered_coherence_map] = ...
-    coherence.findCoherentEvents(sorted_x, sorted_y, sorted_t ,...
-    imgSz, r_s, t_interval, unique_idx, pos, group_ends,...
-    trace_threshold, similarity_threshold, persistence_threshold_high, ...
-    persistence_threshold_low, frameIndex, norm_trace_map_prev);
-
-    filtered_coherence_map(filtered_coherence_map<coherence_threshold) = nan;
-
-    % Set any retention variables
-    norm_trace_map_prev = norm_trace_map;
-
-    % Extract filter mask
-    filter_mask = (filtered_coherence_map>0.00);   
-
-    % Blur mask
-    filter_mask = imgaussfilt(filter_mask.*1, 5.0, "FilterSize", 9);
+    % [t_mean, t_max, t_min, t_std, norm_trace_map, norm_similarity_map, ...
+    % norm_persist_map, filtered_coherence_map] = ...
+    % coherence.findCoherentEvents(sorted_x, sorted_y, sorted_t ,...
+    % imgSz, r_s, t_interval, unique_idx, pos, group_ends,...
+    % trace_threshold, similarity_threshold, persistence_threshold_high, ...
+    % persistence_threshold_low, frameIndex, norm_trace_map_prev);
+    % 
+    % filtered_coherence_map(filtered_coherence_map<coherence_threshold) = nan;
+    % 
+    % % Set any retention variables
+    % norm_trace_map_prev = norm_trace_map;
+    % 
+    % % Extract filter mask
+    % filter_mask = (filtered_coherence_map>0.00);   
+    % 
+    % % Blur mask
+    % filter_mask = imgaussfilt(filter_mask.*1, 5.0, "FilterSize", 9);
 
     % ----------------- ADAPTIVE TIME-SURFACE UPDATE ---------------------%
     % --------------------------------------------------------------------%
     
-    % Ensure polarity is -1 and 1 (if it's 0 and 1)
-    p_signed = double(p_valid);
-    p_signed(p_signed == 0) = -1;
-
-    % Accumulate polarity into a 2D grid
-    % If multiple events land on one pixel, we sum their polarities (e.g., +1 +1 -1 = +1)
-    polarity_map = accumarray([x_valid, y_valid], p_signed, imgSz, @sum, 0);
-
-    [normalized_output_frame, time_surface_map, tau_filtered, decayed_surface] = ...
-    accumulator.localAdaptiveTimeSurface(t_mean, last_event_timestamp,...
-    time_surface_map_prev, frameIndex, surface_k_tau, ...
-    surface_tau_max, surface_tau_min, filter_mask,...
-    polarity_map);
-
-    % Set any retention variables
-    time_surface_map_prev = time_surface_map;
-
-    % Update the last event timestamp
-    last_event_timestamp = max(t_max, eps);
-
-    % Check if frame is empty and fill with empty
-    if isempty(normalized_output_frame)
-
-        normalized_output_frame = ones(imgSz).*0.5; 
-
-    end
-
-    % % Normalize the time surface map for viewing
-    % log_time_surface_map = log1p(time_surface_map);
-    % normalized_output_frame = log_time_surface_map ./ ...
-    %     max(log_time_surface_map(:));  
+    % % Ensure polarity is -1 and 1 (if it's 0 and 1)
+    % p_signed = double(p_valid);
+    % p_signed(p_signed == 0) = -1;
+    % 
+    % % Accumulate polarity into a 2D grid
+    % % If multiple events land on one pixel, we sum their polarities (e.g., +1 +1 -1 = +1)
+    % polarity_map = accumarray([x_valid, y_valid], p_signed, imgSz, @sum, 0);
+    % 
+    % [normalized_output_frame, time_surface_map, tau_filtered, decayed_surface] = ...
+    % accumulator.localAdaptiveTimeSurface(t_mean, last_event_timestamp,...
+    % time_surface_map_prev, frameIndex, surface_k_tau, ...
+    % surface_tau_max, surface_tau_min, filter_mask,...
+    % polarity_map);
+    % 
+    % % Set any retention variables
+    % time_surface_map_prev = time_surface_map;
+    % 
+    % % Update the last event timestamp
+    % last_event_timestamp = max(t_max, eps);
+    % 
+    % % Check if frame is empty and fill with empty
+    % if isempty(normalized_output_frame)
+    % 
+    %     normalized_output_frame = ones(imgSz).*0.5; 
+    % 
+    % end 
 
     % ----------------- NUNES GLOBAL ADAPTIVE ACCUMULATION----------------%
     % --------------------------------------------------------------------%
@@ -276,21 +270,19 @@ for frameIndex = 1:frame_total
     % ----------------- LEAKY TIME-SURFACE ACCUMULATION ------------------%
     % --------------------------------------------------------------------%
     
-    % % Define "Current Time" for this frame (end of the window)
-    % t_now = t_range_n; 
-    % 
-    % % Update the surface and get the visualization
-    % [normalized_output_frame, sae_t_map, sae_p_map] = ...
-    %     accumulator.standardTimeSurface(sae_t_map, sae_p_map, ...
-    %     x_valid, y_valid, t_valid, p_valid, ...
-    %     imgSz, t_now, sae_tau);
-    % 
-    % % Note: normalized_output_frame is now between -1 and 1.
-    % % For visualization as a grayscale image (0-255), we typically shift it.
-    % % 0.5 becomes "gray" (no event), 1 is White (On), 0 is Black (Off).
-    % 
-    % % Remap [-1, 1] -> [0, 1] for the video writer
-    % normalized_output_frame = (normalized_output_frame + 1) / 2;
+    % Define "Current Time" for this frame (end of the window)
+    t_now = t_range_n; 
+
+    % Update the surface and get the visualization
+    [ts_t_map, normalized_output_frame] = accumulator.timeSurface(ts_t_map, sorted_x,...
+        sorted_y, sorted_t, imgSz, ts_time_constant);
+
+    % Note: normalized_output_frame is now between -1 and 1.
+    % For visualization as a grayscale image (0-255), we typically shift it.
+    % 0.5 becomes "gray" (no event), 1 is White (On), 0 is Black (Off).
+
+    % Remap [-1, 1] -> [0, 1] for the video writer
+    normalized_output_frame = (normalized_output_frame + 1) / 2;
 
     % ----------------- SPEED INVARIENT TIME-SURFACE ACCUMULATION ------------------%
     % --------------------------------------------------------------------%

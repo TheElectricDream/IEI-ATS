@@ -1,0 +1,357 @@
+clear;
+clc;
+close all;
+
+%% Processing pipeline reminder
+% To import AEDAT4 -->
+% /home/alexandercrain/Repositories/CNN/import/importAEDAT4toHDF5.py
+
+% All datasets --> /home/alexandercrain/Dropbox/Graduate Documents/
+% Doctor of Philosophy/Thesis Research/Datasets/SPOT
+
+% Datasets for MATLAB --> /home/alexandercrain/Dropbox/Graduate Documents/
+% Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5
+
+%% Define processing range
+% Define start and end time to process [seconds]
+t_start_process = 0; 
+t_end_process   = 240; 
+
+%% Import events for inspection
+
+% Set path to datasets
+hdf5_path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
+    '/Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5/'];
+
+% Set dataset name
+%file_name = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
+file_name = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+%file_name = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
+%file_name = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
+
+% Load the data
+tk = double(h5read([hdf5_path file_name], '/timestamp'));
+xk = single(h5read([hdf5_path file_name], '/x'));
+yk = single(h5read([hdf5_path file_name], '/y'));
+pk = single(h5read([hdf5_path file_name], '/polarity'));
+
+% Convert time to seconds
+tk = (tk - tk(1))/1e6;
+
+% Convert to single data type to use less memory
+tk = single(tk);
+
+% Define whether polarity should be ignored
+include_polarity = false;
+
+% Define whether a Gaussian filter should be applied to the output
+filter_image = false;
+
+% Find indices within the valid range
+valid_idx = tk >= t_start_process & tk <= t_end_process;
+
+% Filter the data vectors
+tk = tk(valid_idx);
+xk = xk(valid_idx);
+yk = yk(valid_idx);
+pk = pk(valid_idx);
+
+% Shift time to start at 0 for the new window
+% This ensures your frame loop starts correctly at frame 1
+tk = tk - t_start_process; 
+
+% Clear unused variables for memory
+clearvars valid_idx;
+
+%% Initialize all tunable parameters for the algorithms
+% Set the image size
+imgSz                       = [640, 480]; 
+
+% Define coherence constants
+r_s                         = 30/imgSz(1);  % spatial radius [pixels norm]
+
+% Thresholds
+similarity_threshold        = 0.0;
+trace_threshold             = 0.0;
+persistence_threshold_high  = 0.0001;
+persistence_threshold_low   = 0.00001;
+coherence_threshold         = 0.06;
+
+% Set time-surface parameters
+surface_k_tau               = 1.0;
+surface_tau_min             = 0.001;
+surface_tau_max             = 1.2;
+
+% Standard time surface
+sae_t_map = -inf(imgSz); 
+sae_p_map = zeros(imgSz);
+
+% Decay constant for the visual 
+sae_tau = 1; % [seconds]
+
+% Set the time interval to accumulate over
+t_interval                  = 0.33;  % [s]
+t_total                     = max(tk);  % [s]
+frame_total                 = floor(t_total/t_interval);
+
+% SITS (Speed Invariant) Initialization
+sits_t_map = -inf(imgSz);
+sits_p_map = zeros(imgSz);
+
+% Initialize tau_map with a default "slow" decay 
+% so the first events don't vanish instantly.
+default_tau = t_total; 
+sits_tau_map = ones(imgSz) * default_tau;
+
+% Parameter K (Scaling factor)
+% K = 3 means the trail lasts for 3x the inter-event interval.
+sits_k = 3.0;
+
+%% Initialize all figure code for video output
+% Indicate which videos should be saved
+cohOut = false;
+atsOut = true;
+
+% Initialize the videos
+[hFigs, hAxs, hImgs, videoWriters] = plot.initializeEventVideos(cohOut,...
+    atsOut, imgSz);
+
+%% Initialize data storage and perform data optimizations
+% Identify number of events
+current_idx     = 1;
+n_events        = length(tk);
+frame_time      = zeros(frame_total, 1);
+
+% Initialize per-pixel timestamp tracking
+last_event_timestamp    = zeros(imgSz);
+norm_trace_map_prev     = zeros(imgSz);
+time_surface_map_prev   = zeros(imgSz);
+
+% Initialize Nunes algorithm constants
+params.tau_N = 10000; % Decay constant (Number of Global Events).
+state = []; % Initialize empty state
+
+%% Data processing starting point
+% Loop through the figures to capture each frame
+for frameIndex = 1:frame_total  
+
+    % Start loop timer
+    tic;
+    
+    % Increment the interval
+    t_range_c = (frameIndex - 1) * t_interval;
+    t_range_n = (t_range_c+t_interval);
+
+    % % Initialize display map for this frame
+    % % We will visualize the activity state at the end of the frame
+    % nunes_activity_map = G_activity; 
+
+    % Slice the events to a valid range
+    [current_idx, x_valid, y_valid, t_valid, p_valid] = ...
+    process.sliceToValidRange(t_range_n, xk, yk, tk, pk, imgSz, current_idx);
+
+    % Confirm the presence of valid events in the packet
+    % If no events are present, we skip this frame
+    if isempty(t_valid)
+        
+        fprintf('There are no events in this slice, skipping... \n');
+        continue;
+        
+    end   
+
+    % ---------------------- EVENT PREPERATION------------------------%
+    % ----------------------------------------------------------------%
+    
+    % Convert 2D subscripts (x,y) to 1D linear indices
+    % Imagine you are a post-man with a disorganized stack of letters. 
+    % Instead of dealing with letters for
+    % 3rd Avenue, 5th street, the sub2ind function assigns and "ID" for
+    % each house. So going forward, (3,5) might just be "House #1".
+    % Programatically this just means that (1,1) is "1", (1,2) is "2".
+    % So you will have a list at the end which is of size x*y. In this
+    % case with a frame of size 640 by 480, the MAXIMUM size of the list
+    % is 307,200. However the practical size of the list will change as
+    % not every pixel is active.
+    linear_idx = sub2ind(imgSz, x_valid, y_valid);
+    
+    % So now that we have a linear index, we sort them by "ID". So
+    % ultimately what we get here is a sorted list of event times where we
+    % have all event time differences for each pixel coordinate groupped. 
+    % So the time intervals may not actually be monotonic. So
+    % sorted_idx is basically the list of "houses" grouped together.
+    [sorted_idx, sort_order] = sort(linear_idx);
+    sorted_t = t_valid(sort_order);
+    sorted_x = x_valid(sort_order);
+    sorted_y = y_valid(sort_order);
+    sorted_p = p_valid(sort_order);
+
+    % Reset the frames for the current loop
+    counts = zeros(imgSz);
+    
+    % With the sorted index list, aka the houses, we can extract where
+    % in that list each "house" starts. That would be the "pos" output.
+    % The unique_idx list is the complete list of all houses. 
+    [unique_idx, pos, ~] = unique(sorted_idx);
+           
+    % Now we need to find where each "house" starts and ends. The start
+    % is easy because we get it from "pos". The end can be inferred
+    % from the start because the start of the NEXT "house" group is
+    % always one more than the end of the previous group. So,
+    % pos(2:end)-1 gives the list of ends. We do not know when the last
+    % group will end, but we do know that it MUST end by the end of the
+    % dataset. So this is the length(sorted_idx).
+    group_ends = [pos(2:end)-1; length(sorted_idx)];
+
+    % This is a bit of cheeky MATLAB code. Because "unique_idx" is a
+    % linear index list, MATLAB knows to map it to the size of the 2D
+    % array "counts". So although group_end and pos are vectors, the
+    % output is a 640x480 array. Additionally, the ending position of
+    % each "house" minus the starting position (i.e. the difference)
+    % gives you the total number of "things" assigned to that "ID". 
+    counts(unique_idx) = group_ends - pos + 1;
+
+    % ---------------------- EVENT COHERENCE -------------------------%
+    % ----------------------------------------------------------------%
+
+    [t_mean, t_max, t_min, t_std, norm_trace_map, norm_similarity_map, ...
+    norm_persist_map, filtered_coherence_map] = ...
+    coherence.findCoherentEvents(sorted_x, sorted_y, sorted_t ,...
+    imgSz, r_s, t_interval, unique_idx, pos, group_ends,...
+    trace_threshold, similarity_threshold, persistence_threshold_high, ...
+    persistence_threshold_low, frameIndex, norm_trace_map_prev);
+
+    filtered_coherence_map(filtered_coherence_map<coherence_threshold) = nan;
+
+    % Set any retention variables
+    norm_trace_map_prev = norm_trace_map;
+
+    % Extract filter mask
+    filter_mask = (filtered_coherence_map>0.00);   
+
+    % Blur mask
+    filter_mask = imgaussfilt(filter_mask.*1, 5.0, "FilterSize", 9);
+
+    % ----------------- ADAPTIVE TIME-SURFACE UPDATE ---------------------%
+    % --------------------------------------------------------------------%
+    
+    % Ensure polarity is -1 and 1 (if it's 0 and 1)
+    p_signed = double(p_valid);
+    p_signed(p_signed == 0) = -1;
+
+    % Accumulate polarity into a 2D grid
+    % If multiple events land on one pixel, we sum their polarities (e.g., +1 +1 -1 = +1)
+    polarity_map = accumarray([x_valid, y_valid], p_signed, imgSz, @sum, 0);
+
+    [normalized_output_frame, time_surface_map, tau_filtered, decayed_surface] = ...
+    accumulator.localAdaptiveTimeSurface(t_mean, last_event_timestamp,...
+    time_surface_map_prev, frameIndex, surface_k_tau, ...
+    surface_tau_max, surface_tau_min, filter_mask,...
+    polarity_map);
+
+    % Set any retention variables
+    time_surface_map_prev = time_surface_map;
+
+    % Update the last event timestamp
+    last_event_timestamp = max(t_max, eps);
+
+    % Check if frame is empty and fill with empty
+    if isempty(normalized_output_frame)
+
+        normalized_output_frame = ones(imgSz).*0.5; 
+
+    end 
+
+    % ----------------- NUNES GLOBAL ADAPTIVE ACCUMULATION----------------%
+    % --------------------------------------------------------------------%
+    
+    % [normalized_output_frame, state] = ...
+    %     accumulator.nunesGlobalAdaptive(x_valid, y_valid, p_valid, imgSz,...
+    %     state, params);
+
+    % ----------------- LEAKY TIME-SURFACE ACCUMULATION ------------------%
+    % --------------------------------------------------------------------%
+    
+    % % Define "Current Time" for this frame (end of the window)
+    % t_now = t_range_n; 
+    % 
+    % % Update the surface and get the visualization
+    % [normalized_output_frame, sae_t_map, sae_p_map] = ...
+    %     accumulator.TimeSurface(sae_t_map, sae_p_map, ...
+    %     x_valid, y_valid, t_valid, p_valid, ...
+    %     imgSz, t_now, sae_tau);
+    % 
+    % % Note: normalized_output_frame is now between -1 and 1.
+    % % For visualization as a grayscale image (0-255), we typically shift it.
+    % % 0.5 becomes "gray" (no event), 1 is White (On), 0 is Black (Off).
+    % 
+    % % Remap [-1, 1] -> [0, 1] for the video writer
+    % normalized_output_frame = (normalized_output_frame + 1) / 2;
+
+    % ----------------- SPEED INVARIENT TIME-SURFACE ACCUMULATION ------------------%
+    % --------------------------------------------------------------------%
+
+    % t_now = t_range_n;
+    % 
+    % [normalized_output_frame, sits_t_map, sits_tau_map, sits_p_map] = ...
+    %     accumulator.speedInvariantTimeSurface(sits_t_map, sits_tau_map, ...
+    %     sits_p_map, x_valid, y_valid, t_valid, p_valid, ...
+    %     imgSz, t_now, sits_k);
+    % 
+    % % Remap to 0-1 for video
+    % normalized_output_frame = (normalized_output_frame + 1) / 2;
+
+    % ------------------------ EXPORTING VIDEO ---------------------------%
+    % --------------------------------------------------------------------%
+
+    % Convert to uint8 (0-255 range)
+    grayscale_normalized_output_frame = ...
+        uint8(normalized_output_frame .* 255);
+
+    % Apply a Gaussian filter to help smooth out the final image
+    if filter_image 
+         grayscale_normalized_output_frame = ...
+             imgaussfilt(grayscale_normalized_output_frame, ...
+             3.0,"FilterSize",3); %#ok<UNRCH>
+    end
+
+    % Log processing time
+    frame_time(frameIndex) = toc;
+
+    if atsOut
+        % Capture the frame for the video writer
+        set(hImgs{1}, 'CData', grayscale_normalized_output_frame');
+        set(hImgs{1}, 'AlphaData', ~isnan(grayscale_normalized_output_frame'));
+        set(hAxs{1}, 'Visible','off');
+        colormap(gray);
+        clim([0 255]);
+        writeVideo(videoWriters{1}, grayscale_normalized_output_frame'); %getframe(hFigs{1}));
+        
+        frameOutputFolder = 'nom_rot_frames';
+        % Also write each frame as a PNG to a folder
+        % Ensure output folder exists
+        if ~exist(frameOutputFolder, 'dir')
+            mkdir(frameOutputFolder);
+        end
+        % Build filename with zero-padded frame index
+        fname = fullfile(frameOutputFolder, sprintf('frame_%05d.png', frameIndex));
+        % Write the PNG. imwrite expects HxWx1 or HxWx3; transpose to match display
+        imwrite(grayscale_normalized_output_frame', fname);
+    end
+
+    % if cohOut
+    %     % Capture the frame
+    %     set(hImgs{2}, 'CData', coherence_map');
+    %     set(hImgs{2}, 'AlphaData', ~isnan(coherence_map'));
+    %     set(hAxs{2}, 'Visible','off');
+    %     writeVideo(videoWriters{2}, getframe(hFigs{2})); 
+    % end
+
+    % Print progress
+    stats.printPercentComplete(frameIndex, frame_total, frame_time(frameIndex));
+
+end
+
+% Close the video writer
+for videosIdx = 1:length(videoWriters)
+    close(videoWriters{videosIdx});
+end
