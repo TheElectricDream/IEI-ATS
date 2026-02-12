@@ -12,6 +12,9 @@ close all;
 % Datasets for MATLAB --> /home/alexandercrain/Dropbox/Graduate Documents/
 % Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5
 
+% Notes:
+% - Look into kriging interpolation
+
 %% Define processing range
 % Define start and end time to process [seconds]
 t_start_process = 60; 
@@ -237,7 +240,7 @@ for frameIndex = 1:frame_total
     % --------------------------------------------------------------------%
 
     [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff] = ...
-        coherence.computeNeighborhoodStats(sorted_t, unique_idx, pos, ...
+        stats.computeNeighborhoodStats(sorted_t, unique_idx, pos, ...
         group_ends, imgSz);
 
     % ---------------------- EVENT COHERENCE -----------------------------%
@@ -261,23 +264,23 @@ for frameIndex = 1:frame_total
     % % Blur mask
     % filter_mask = imgaussfilt(filter_mask.*1, 5.0, "FilterSize", 9);
 
-    % [norm_trace_map, norm_similarity_map, ...
-    % norm_persist_map, filtered_coherence_map] = ...
-    % coherence.computeCoherenceMask(sorted_x, sorted_y, sorted_t,...
-    % imgSz, r_s, t_interval, unique_idx, pos, group_ends, trace_threshold, ...
-    % similarity_threshold, persistence_threshold_high, persistence_threshold_low, ...
-    % frameIndex, norm_trace_map_prev);
-    % 
-    % filtered_coherence_map(filtered_coherence_map<coherence_threshold) = nan;
-    % 
-    % % Set any retention variables
-    % norm_trace_map_prev = norm_trace_map;
-    % 
-    % % Extract filter mask
-    % filter_mask = (filtered_coherence_map>0.00);   
-    % 
-    % % Blur mask
-    % filter_mask = imgaussfilt(filter_mask.*1, 5.0, "FilterSize", 9);
+    [norm_trace_map, norm_similarity_map, ...
+    norm_persist_map, filtered_coherence_map] = ...
+    coherence.computeCoherenceMask(sorted_x, sorted_y, sorted_t,...
+    imgSz, r_s, t_interval, unique_idx, pos, group_ends, trace_threshold, ...
+    similarity_threshold, persistence_threshold_high, persistence_threshold_low, ...
+    frameIndex, norm_trace_map_prev);
+
+    filtered_coherence_map(filtered_coherence_map<coherence_threshold) = nan;
+
+    % Set any retention variables
+    norm_trace_map_prev = norm_trace_map;
+
+    % Extract filter mask
+    filter_mask = (filtered_coherence_map>0.00);   
+
+    % Blur mask
+    filter_mask = imgaussfilt(filter_mask.*1, 5.0, "FilterSize", 9);
 
     % -------------- ADAPTIVE LOCAL TIME-SURFACE UPDATE ------------------%
     % --------------------------------------------------------------------%
