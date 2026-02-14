@@ -14,7 +14,6 @@ function [normalized_output_frame, time_surface_map, tau_filtered, decayed_surfa
 
     % Calculate the candidate decay time
     candidate_tau_n = max(t_mean, eps);
-    %candidate_tau_n = 1 ./ (max(t_mean, eps));
 
     % Bound the candidate map
     candidate_tau_n(candidate_tau_n>surface_tau_max) = surface_tau_max;
@@ -22,12 +21,11 @@ function [normalized_output_frame, time_surface_map, tau_filtered, decayed_surfa
 
     % Calculate recency 
     recency_function = zeros(size(candidate_tau_n));
-    last_event_timestamp(isnan(last_event_timestamp)) = 0;
     mask_recency = (last_event_timestamp ~= 0);
     recency_function(mask_recency) = ...
         exp(-last_event_timestamp(mask_recency));
     recency_weighted_tau = candidate_tau_n .* recency_function + ...
-        surface_tau_min .* (1 - recency_function);
+        surface_tau_max .* (1 - recency_function);
 
     % Smooth the tau map (spatial consistency)
     tau_current = recency_weighted_tau;
@@ -36,9 +34,7 @@ function [normalized_output_frame, time_surface_map, tau_filtered, decayed_surfa
         "FilterSize", recency_filter_size); 
 
     % A. Apply Adaptive Decay
-    %decay_factor = exp(-dt ./ tau_current);
-
-    decay_factor = exp(-dt ./ surface_tau_min);
+    decay_factor = exp(-dt ./ tau_current);
     decayed_surface = time_surface_map_prev .* decay_factor;
 
     % B. Add Weighted Polarity Input
@@ -49,7 +45,7 @@ function [normalized_output_frame, time_surface_map, tau_filtered, decayed_surfa
     masked_input = polarity_map .* filter_mask;
     
     % ACCUMULATE
-    time_surface_map = decayed_surface + masked_input;
+    time_surface_map = masked_input+decayed_surface;
 
     normalized_output_frame = normalizeSurface(time_surface_map);
 

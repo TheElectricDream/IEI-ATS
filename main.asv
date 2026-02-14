@@ -280,12 +280,11 @@ for frameIndex = 1:frame_total
         % Extract filter mask
         filter_mask = single(filtered_coherence_map > 0);   
     
-        % Blur filter mask to preserve edge detail
+        % Blur mask
         filter_mask = imgaussfilt(filter_mask, 5.0, "FilterSize", 9);
 
     else
-        
-        % Use a unity mask instead
+ 
         filter_mask = ones(imgSz);
 
     end
