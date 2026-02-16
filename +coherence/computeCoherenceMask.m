@@ -85,16 +85,16 @@ function [norm_trace_map, norm_similarity_map, ...
     log_persist_map = log1p(persist_map); 
     norm_persist_map = log_persist_map ./ max(log_persist_map(:)); 
 
-    %Calculate the coherence map
-    opts.dx = 1;
-    opts.dy = 1;
-    opts.dt = t_interval;
-    [voxelOccupancy, ~, ~,...
-    ~] = voxelization.discretizeEventsToVoxels(sorted_x, sorted_y, sorted_t, opts);
-    voxelCleanMap = bwareaopen(voxelOccupancy, 2);
+    % %Calculate the coherence map
+    % opts.dx = 1;
+    % opts.dy = 1;
+    % opts.dt = t_interval;
+    % [voxelOccupancy, ~, ~,...
+    % ~] = voxelization.discretizeEventsToVoxels(sorted_x, sorted_y, sorted_t, opts);
+    % voxelCleanMap = bwareaopen(voxelOccupancy, 2);
+    % 
+    % cleanMap = voxelCleanMap(:,:,1)+voxelCleanMap(:,:,2);
+    % cleanMap = imgaussfilt(cleanMap.*1, 5.0, "FilterSize", 9);
 
-    cleanMap = voxelCleanMap(:,:,1)+voxelCleanMap(:,:,2);
-    cleanMap = imgaussfilt(cleanMap.*1, 5.0, "FilterSize", 9);
-
-    filtered_coherence_map = (norm_trace_map .* norm_persist_map).*cleanMap;    
+    filtered_coherence_map = (norm_trace_map .* norm_persist_map);%.*cleanMap;    
 end

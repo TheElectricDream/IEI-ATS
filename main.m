@@ -28,9 +28,9 @@ hdf5_path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
 
 % Set dataset name
 %file_name = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-file_name = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+%file_name = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
 %file_name = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
-%file_name = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
+file_name = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
 
 % Load the data
 tk = double(h5read([hdf5_path file_name], '/timestamp'));
@@ -77,6 +77,10 @@ frame_total                 = floor(t_total/t_interval);
 % Boolean controls
 filter_output_image         = false;
 
+% Persistent inter-event-interval map (EMA)
+iei_map   = zeros(imgSz);
+iei_alpha = 0.8;     
+
 % COHERENCE PARAMETERS
 % --------------------
 % Define coherence constants
@@ -85,21 +89,23 @@ r_s                         = 30/imgSz(1);  % spatial radius [pixels norm]
 % Thresholds
 similarity_threshold        = 0.0;
 trace_threshold             = 0.0;
-persistence_threshold_high  = 0.0001;
-persistence_threshold_low   = 0.00001;
-coherence_threshold         = 0.06;
+persistence_threshold_high  = 0.001;
+persistence_threshold_low   = 0.0;
+coherence_threshold         = 0.01;
+filter_mask                 = ones(imgSz);
 
 % Boolean controls
 filter_by_coherence         = false;
 
 % ADAPTIVE LOCAL TIME-SURFACE PARAMETERS
-% --------------------------------
+% --------------------------------------
 % Set adaptive local time-surface parameters
-alts_params.surface_tau_min      = 0.2;
-alts_params.surface_tau_max      = 0.9;
+alts_params.surface_tau_min      = 0.6;
+alts_params.surface_tau_max      = 1.5;
 alts_params.dt                   = t_interval;
-alts_params.recency_filter_size  = 9;
-alts_params.recency_filter_sigma = 3.0;
+alts_params.recency_filter_size  = 7;
+alts_params.recency_filter_sigma = 2.0;
+alts_params.surface_tau_release  = 0.4;
 
 % TIME SURFACE PARAMETERS
 % -----------------------
@@ -135,7 +141,7 @@ agd_state.last_update_time = t_start_process;
 % Note: for unfiltered events with large spikes, an aggressive smoothing 
 % factor is needed. Otherwise, the scene rests anytime it sees a hot pixel
 agd_params.alpha   = 0.001;   % Smoothing factor for activity 
-agd_params.K       = 50000.0;  % Scaling factor (Controls "memory length")
+agd_params.K       = 5000000.0;  % Scaling factor (Controls "memory length")
 agd_activity_store = zeros(length(frame_total),1);
 
 %% Initialize all figure code for video output
@@ -239,56 +245,58 @@ for frameIndex = 1:frame_total
 
     % Create a "truth mask" before we splat the time data so that we can
     % recover the real events
-    real_event_mask = single((counts > 0));
+    % real_event_mask = single((counts > 0));
 
     % "Splat" the time data to reduce the amount of open space
-    [sorted_x_splatted, sorted_y_splatted, sorted_t_splatted, ...
-        unique_idx_splatted, pos_splatted, group_ends_splatted] = ...
-        spreadEventsSpatially(x_valid, y_valid, t_valid, imgSz, 4);
+    % [sorted_x_splatted, sorted_y_splatted, sorted_t_splatted, ...
+    %     unique_idx_splatted, pos_splatted, group_ends_splatted] = ...
+    %     stats.spreadEventsSpatially(x_valid, y_valid, t_valid, imgSz, 2);
 
     % ------------------------- STATISTICS -------------------------------%
     % --------------------------------------------------------------------%
 
     [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff] = ...
-        stats.computeNeighborhoodStats(sorted_t_splatted, ...
-        unique_idx_splatted, pos_splatted, ...
-        group_ends_splatted, imgSz);
-    
-    % Recover the original data, but with the larger spread
-    t_mean_diff = t_mean_diff.*real_event_mask;
-    t_max = t_max.*real_event_mask;
+        stats.computeNeighborhoodStats(sorted_t, ...
+        unique_idx, pos, ...
+        group_ends, imgSz);
+
+    % Update a persistant map of the inter-event interval so that sparse
+    % data is retained
+    new_obs_mask = (t_mean_diff > 0); 
+    iei_map(new_obs_mask) = (1 - iei_alpha) .* iei_map(new_obs_mask) +...
+        iei_alpha .* t_mean_diff(new_obs_mask);
 
     % ---------------------- EVENT COHERENCE -----------------------------%
     % --------------------------------------------------------------------%
 
-    [norm_trace_map, norm_similarity_map, norm_persist_map,...
-        filtered_coherence_map] = coherence.computeCoherenceMask(sorted_x,...
-        sorted_y, sorted_t, imgSz, r_s, t_interval, unique_idx, pos, ...
-        group_ends, trace_threshold, similarity_threshold, ...
-        persistence_threshold_high, persistence_threshold_low, frameIndex,...
-        norm_trace_map_prev);
-
-    filtered_coherence_map(filtered_coherence_map<coherence_threshold) = nan;
-
-    % Set any retention variables
-    norm_trace_map_prev = norm_trace_map;
-
-    % Choose whether or not to generate a filter
-
-    if filter_by_coherence == true
-
-        % Extract filter mask
-        filter_mask = single(filtered_coherence_map > 0);   
-    
-        % Blur filter mask to preserve edge detail
-        filter_mask = imgaussfilt(filter_mask, 5.0, "FilterSize", 9);
-
-    else
-        
-        % Use a unity mask instead
-        filter_mask = ones(imgSz);
-
-    end
+    % [norm_trace_map, norm_similarity_map, norm_persist_map,...
+    %     filtered_coherence_map] = coherence.computeCoherenceMask(sorted_x,...
+    %     sorted_y, sorted_t, imgSz, r_s, t_interval, unique_idx, pos, ...
+    %     group_ends, trace_threshold, similarity_threshold, ...
+    %     persistence_threshold_high, persistence_threshold_low, frameIndex,...
+    %     norm_trace_map_prev);
+    % 
+    % filtered_coherence_map(filtered_coherence_map<coherence_threshold) = nan;
+    % 
+    % % Set any retention variables
+    % norm_trace_map_prev = norm_trace_map;
+    % 
+    % % Choose whether or not to generate a filter
+    % 
+    % if filter_by_coherence == true
+    % 
+    %     % Extract filter mask
+    %     filter_mask = single(filtered_coherence_map > 0);   
+    % 
+    %     % Blur filter mask to preserve edge detail
+    %     filter_mask = imgaussfilt(filter_mask, 5.0, "FilterSize", 9);
+    % 
+    % else
+    % 
+    %     % Use a unity mask instead
+    %     filter_mask = ones(imgSz);
+    % 
+    % end
 
     % -------------- ADAPTIVE LOCAL TIME-SURFACE UPDATE ------------------%
     % --------------------------------------------------------------------%
@@ -300,23 +308,16 @@ for frameIndex = 1:frame_total
     % Normalize the timestamp 
     % Note: Tried this function out of curiosity
     % https://www.mathworks.com/help/images/ref/entropyfilt.html
-    % t_entropy_mean = entropyfilt(t_mean_diff);
-    log_t_mean = log1p(t_mean_diff);
+    %t_entropy_mean = entropyfilt(iei_map);
+    log_t_mean = log1p(iei_map);
     norm_t_mean_diff = log_t_mean./max(log_t_mean(:));
 
     [normalized_output_frame, time_surface_map, tau_filtered, decayed_surface] = ...
-    accumulator.localAdaptiveTimeSurface(norm_t_mean_diff, last_event_timestamp,...
+    accumulator.localAdaptiveTimeSurface(norm_t_mean_diff,...
     time_surface_map_prev, alts_params, filter_mask, polarity_map);
 
     % Set any retention variables
     time_surface_map_prev = time_surface_map;
-
-    % Update the last event timestamp
-    last_event_timestamp = max(t_max-t_range_c, eps);
-
-    % Normalize the timestamp 
-    log_last_event_timestamp = log1p(last_event_timestamp);
-    last_event_timestamp = log_last_event_timestamp./max(log_last_event_timestamp(:));
 
     % ----------------- NUNES GLOBAL ADAPTIVE ACCUMULATION----------------%
     % --------------------------------------------------------------------%
