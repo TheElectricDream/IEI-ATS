@@ -25,9 +25,15 @@ function [normalized_output_frame, time_surface_map, tau_filtered, decayed_surfa
     tau_filtered = imgaussfilt(tau_active, recency_filter_sigma,...
         "FilterSize", recency_filter_size); 
 
-    % Build a current-activity indicator: 1 where events arrive, 
-    % 0 where idle
-    activity_indicator = single(polarity_map ~= 0);
+    % Apply the filter_mask BEFORE computing activity so the
+    % attack-release envelope sees only events that survive filtering.
+    % Without this, filtered pixels appear "active" and get the slow
+    % tau_active decay instead of the fast tau_release, causing trails.
+    masked_input = polarity_map .* filter_mask;
+
+    % Build activity indicator from the FILTERED input
+    activity_indicator = single(masked_input ~= 0);
+    activity_indicator(isnan(activity_indicator))=0;
 
     % Smooth it spatially so the transition isn't pixel-sharp
     activity_blurred = imgaussfilt(activity_indicator, recency_filter_sigma, ...
@@ -39,33 +45,95 @@ function [normalized_output_frame, time_surface_map, tau_filtered, decayed_surfa
                     surface_tau_release .* (1 - activity_blurred); 
 
     % Apply Adaptive Decay
-    decay_factor = exp(-dt ./ tau_effective);
+    decay_factor = exp(-dt./tau_effective); %tanh(tau_effective);
     decayed_surface = time_surface_map_prev .* decay_factor;
-
-    % Add Weighted Polarity Input
-    % We use the polarity_map instead of norm_trace_map.
-    % This adds +1 (ON) or -1 (OFF) to the surface.
-    
-    % Apply the filter_mask to the polarity map to remove noise
-    masked_input = polarity_map .* filter_mask;
     
     % Accumulate
     time_surface_map = masked_input + decayed_surface;
 
     % Normalize the output frame
-    normalized_output_frame = normalizeSurface(time_surface_map);
+    normalized_output_frame = normalizeSurface(time_surface_map, 10, 1.5);
+
 
 end
 
-function norm_S = normalizeSurface(S)
+% function norm_S = normalizeSurface(S)
+% 
+%     % Clip values to a reasonable contrast integration range    
+%     % Robust Auto-scale (Ignore outliers)
+%     mean_val = mean(S(:));
+%     std_val = std(S(:));
+%     min_v = mean_val - 3*std_val;
+%     max_v = mean_val + 3*std_val;
+%     S_clipped = max(min(S, max_v), min_v);
+%     norm_S = (S_clipped - min_v) / (max_v - min_v);
+% 
+% end
 
-    % Clip values to a reasonable contrast integration range    
-    % Robust Auto-scale (Ignore outliers)
-    mean_val = mean(S(:));
-    std_val = std(S(:));
-    min_v = mean_val - 3*std_val;
-    max_v = mean_val + 3*std_val;
-    S_clipped = max(min(S, max_v), min_v);
-    norm_S = (S_clipped - min_v) / (max_v - min_v);
+% function norm_S = normalizeSurface(S)
+%     % 1. Log-compress to reduce extreme dynamic range before CLAHE
+%     sign_S = sign(S);
+%     abs_S  = abs(S);
+%     compressed = sign_S .* log1p(abs_S);
+% 
+%     % 2. Rescale to [0, 1] for adapthisteq input
+%     c_min = min(compressed(:));
+%     c_max = max(compressed(:));
+%     if c_max - c_min < eps
+%         norm_S = 0.5 * ones(size(S));
+%         return;
+%     end
+%     prescaled = (compressed - c_min) / (c_max - c_min);
+% 
+%     % 3. CLAHE: locally adaptive equalization
+%     %    - NumTiles controls the spatial granularity of adaptation
+%     %    - ClipLimit controls how much contrast enhancement is allowed
+%     %      (lower = more uniform, higher = more local contrast)
+%     norm_S = adapthisteq(prescaled, ...
+%         'NumTiles',  [16 16], ...
+%         'ClipLimit', 0.02, ...
+%         'Distribution', 'uniform');
+% end
+
+% function norm_S = normalizeSurface(S, scale)
+%     % Fixed symmetric tone mapping via hyperbolic tangent.
+%     % Maps S -> [0, 1] with midpoint at 0.5 (zero surface = gray).
+%     %
+%     %   scale controls contrast:
+%     %     - Larger scale  = softer curve, more headroom for extremes
+%     %     - Smaller scale = steeper curve, more contrast in quiet regions
+%     %
+%     % The tanh function is a standard sigmoidal tone-mapping operator;
+%     % see Reinhard et al. (2002), "Photographic Tone Reproduction for
+%     % Digital Images," ACM SIGGRAPH, Eq. 4 and discussion of sigmoid
+%     % compression for high dynamic range imagery.
+% 
+%     if nargin < 2
+%         scale = 3.0;
+%     end
+% 
+%     norm_S = 0.5 + 0.5 * tanh(S / scale);
+% end
+
+function norm_S = normalizeSurface(S, scale, detail_boost)
+
+    if nargin < 2, scale = 3.0; end
+    if nargin < 3, detail_boost = 1.0; end
+
+    S = double(S);
+
+    % 1. Edge-aware decomposition
+    base = imbilatfilt(S, 2.0, 8);
+    detail = S - base;
+
+    % 2. Compress only the base
+    base_compressed = tanh(base / scale);
+
+    % 3. Recombine — detail is NOT divided by scale
+    %    detail_boost directly controls local contrast strength
+    recombined = base_compressed + detail_boost * detail;
+
+    % 4. Fixed mapping to [0, 1]
+    norm_S = 0.5 + 0.5 * tanh(recombined);
 
 end

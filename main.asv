@@ -17,8 +17,8 @@ close all;
 
 %% Define processing range
 % Define start and end time to process [seconds]
-t_start_process = 0; 
-t_end_process   = 1000; 
+t_start_process = 80; 
+t_end_process   = 120; 
 
 %% Import events for inspection
 
@@ -97,12 +97,12 @@ filter_by_coherence         = true;
 % ADAPTIVE LOCAL TIME-SURFACE PARAMETERS
 % --------------------------------------
 % Set adaptive local time-surface parameters
-alts_params.surface_tau_min      = 0.01;
-alts_params.surface_tau_max      = 0.1;
+alts_params.surface_tau_min      = 1.5;
+alts_params.surface_tau_max      = 4.0;
 alts_params.dt                   = t_interval;
 alts_params.recency_filter_size  = 3;
 alts_params.recency_filter_sigma = 9.0;
-alts_params.surface_tau_release  = 0.01;
+alts_params.surface_tau_release  = 0.`;
 
 % TIME SURFACE PARAMETERS
 % -----------------------

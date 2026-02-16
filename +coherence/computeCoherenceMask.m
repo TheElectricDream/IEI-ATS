@@ -2,7 +2,7 @@ function [norm_trace_map, norm_similarity_map, ...
     norm_persist_map, filtered_coherence_map] = computeCoherenceMask(sorted_x, sorted_y, sorted_t,...
     imgSz, r_s, t_interval, unique_idx, pos, group_ends, trace_threshold, ...
     similarity_threshold, persistence_threshold_high, persistence_threshold_low, ...
-    frameIndex, norm_trace_map_prev)
+    frameIndex, norm_trace_map_prev, iei_map)
 
     % Reset the frames for the current loop
     sum_exp_dist_map = zeros(imgSz);
@@ -36,25 +36,31 @@ function [norm_trace_map, norm_similarity_map, ...
     log_trace_map = log1p(sum_exp_dist_map'); 
     norm_trace_map = log_trace_map' ./ max(log_trace_map(:));
 
-    % Calculate point to point similarity in the CV map
-    [similarity_score] = coherence.findSimilarities(sorted_x,...
-        sorted_y, sorted_t./t_interval, imgSz);
+    % % Calculate point to point similarity in the CV map
+    % [similarity_score] = coherence.findSimilarities(sorted_x,...
+    %     sorted_y, sorted_t./t_interval, imgSz);
 
-    % Initialize the empty map
-    similarity_map = nan(imgSz(2), imgSz(1)); 
+    [~, ~, norm_similarity_map] = coherence.findSimilarities( ...
+    sorted_x, sorted_y, iei_map, imgSz, 10);
 
-    % Assign values directly using linear indexing
-    linear_idx_cv_map = sub2ind(size(similarity_map), sorted_y,...
-        sorted_x);
-    similarity_map(linear_idx_cv_map) = similarity_score;
+    % % Initialize the empty map
+    % similarity_map = nan(imgSz(2), imgSz(1)); 
+    % 
+    % % Assign values directly using linear indexing
+    % linear_idx_cv_map = sub2ind(size(similarity_map), sorted_y,...
+    %     sorted_x);
+    % similarity_map(linear_idx_cv_map) = similarity_score;
+    % 
+    % % Remove events which do not meet the similarity criteria
+    % similarity_mask = (similarity_map <= similarity_threshold);
+    % similarity_map(similarity_mask) = 0;
+    % 
+    % % Log normalize the similarity map
+    % log_similarity_map = log1p(similarity_map); 
+    % norm_similarity_map = log_similarity_map' ./ max(log_similarity_map(:));
 
-    % Remove events which do not meet the similarity criteria
-    similarity_mask = (similarity_map <= similarity_threshold);
-    similarity_map(similarity_mask) = 0;
-
-    % Log normalize the similarity map
-    log_similarity_map = log1p(similarity_map); 
-    norm_similarity_map = log_similarity_map' ./ max(log_similarity_map(:));
+    similarity_mask = (norm_similarity_map <= similarity_threshold);
+    norm_similarity_map(similarity_mask) = 0;
 
     % Reset the background to zero for visualization purposes
     norm_similarity_map(isnan(norm_similarity_map)) = 0;
@@ -85,6 +91,10 @@ function [norm_trace_map, norm_similarity_map, ...
     log_persist_map = log1p(persist_map); 
     norm_persist_map = log_persist_map ./ max(log_persist_map(:)); 
 
+    % norm_trace_map = imgaussfilt(norm_trace_map, 5.0, "FilterSize", 9);
+    % norm_similarity_map = imgaussfilt(norm_similarity_map, 5.0, "FilterSize", 9);
+    % norm_persist_map = imgaussfilt(norm_persist_map, 5.0, "FilterSize", 9);
+
     % %Calculate the coherence map
     % opts.dx = 1;
     % opts.dy = 1;
@@ -96,5 +106,6 @@ function [norm_trace_map, norm_similarity_map, ...
     % cleanMap = voxelCleanMap(:,:,1)+voxelCleanMap(:,:,2);
     % cleanMap = imgaussfilt(cleanMap.*1, 5.0, "FilterSize", 9);
 
-    filtered_coherence_map = (norm_trace_map .* norm_persist_map);%.*cleanMap;    
+    filtered_coherence_map = (norm_trace_map + norm_persist_map + norm_similarity_map);%.*cleanMap; 
+    %filtered_coherence_map = bwareaopen(filtered_coherence_map, 3);
 end
