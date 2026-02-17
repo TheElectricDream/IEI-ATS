@@ -17,8 +17,8 @@ close all;
 
 %% Define processing range
 % Define start and end time to process [seconds]
-t_start_process = 0; 
-t_end_process   = 1000; 
+t_start_process = 80; 
+t_end_process   = 100; 
 
 %% Import events for inspection
 
@@ -97,12 +97,15 @@ filter_by_coherence         = true;
 % ADAPTIVE LOCAL TIME-SURFACE PARAMETERS
 % --------------------------------------
 % Set adaptive local time-surface parameters
-alts_params.surface_tau_min      = 0.01;
-alts_params.surface_tau_max      = 0.1;
+alts_params.surface_tau_min      = 0.2;
+alts_params.surface_tau_max      = 2.0;
 alts_params.dt                   = t_interval;
 alts_params.recency_filter_size  = 3;
 alts_params.recency_filter_sigma = 9.0;
-alts_params.surface_tau_release  = 0.01;
+alts_params.surface_tau_release  = 0.2;
+alts_params.iei_low  = 0.001;   % fast-firing threshold [seconds]
+alts_params.iei_high = 0.05;    % slow-firing threshold [seconds]
+alts_activity_score  = zeros(frame_total, 1);
 
 % TIME SURFACE PARAMETERS
 % -----------------------
@@ -249,9 +252,9 @@ for frameIndex = 1:frame_total
 
     % Update a persistant map of the inter-event interval so that sparse
     % data is retained
-    %new_obs_mask = (t_mean_diff > 0); 
-    iei_map = (1 - iei_alpha) .* iei_map +...
-        iei_alpha .* t_mean_diff;
+    new_obs_mask = (t_mean_diff > 0); 
+    iei_map(new_obs_mask) = (1 - iei_alpha) .* iei_map(new_obs_mask) +...
+        iei_alpha .* t_mean_diff(new_obs_mask);
 
     % ---------------------- EVENT COHERENCE -----------------------------%
     % --------------------------------------------------------------------%
@@ -297,15 +300,18 @@ for frameIndex = 1:frame_total
     % Note: Tried this function out of curiosity
     % https://www.mathworks.com/help/images/ref/entropyfilt.html
     %t_entropy_mean = entropyfilt(iei_map);
-    log_t_mean = log1p(iei_map);
-    norm_t_mean_diff = log_t_mean./max(log_t_mean(:));
+    % log_t_mean = log1p(iei_map);
+    % norm_t_mean_diff = log_t_mean./max(log_t_mean(:));
 
-    [normalized_output_frame, time_surface_map, tau_filtered, decayed_surface] = ...
-    accumulator.localAdaptiveTimeSurface(norm_t_mean_diff,...
+    [normalized_output_frame, time_surface_map, tau_filtered, decayed_surface, adaptive_gains] = ...
+    accumulator.localAdaptiveTimeSurface(iei_map,...
     time_surface_map_prev, alts_params, filter_mask, polarity_map);
 
     % Set any retention variables
     time_surface_map_prev = time_surface_map;
+
+    % Store the adaptive map score
+    alts_activity_score(frameIndex) = mean(adaptive_gains(:));
 
     % ----------------- NUNES GLOBAL ADAPTIVE ACCUMULATION----------------%
     % --------------------------------------------------------------------%

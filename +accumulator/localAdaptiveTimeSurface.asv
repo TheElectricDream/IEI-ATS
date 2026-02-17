@@ -54,15 +54,29 @@ function [normalized_output_frame, time_surface_map, tau_filtered, decayed_surfa
 
     adaptive_gains = imgaussfilt(adaptive_gains, 5, ...
          "FilterSize", 7);
+
+    adaptive_gains_remapped = process.linearRemap(adaptive_gains,-0.5, 0.5)+0.5;
    
     % Remap the results
-    %masked_input_remapped = process.linearRemap(masked_input,-0.5, 0.5)+0.5;
+    masked_input_remapped = process.linearRemap(masked_input,-0.5, 0.5)+0.5;
     
-    % EMA Update
-    time_surface_map = adaptive_gains .* masked_input + (1 - adaptive_gains) .* time_surface_map_prev;
+    % EMA update: replaces the old additive accumulation
+    time_surface_map = (1 - adaptive_gains) .* masked_input_remapped;
+
+    %time_surface_map = process.linearRemap(time_surface_map,-0.5, 0.5)+0.5;
     
+    %time_surface_map_remapped = adaptive_gains_remapped .* masked_input_remapped + (1 - adaptive_gains_remapped) .* masked_input_remapped;
     % Normalize the output frame
     normalized_output_frame = normalizeSurface(time_surface_map, 8, 1.0);
+    % 
+    % figure(20);
+    % cla;
+    % % Display the normalized output frame
+    % imagesc(normalized_output_frame');
+    % colorbar;
+    % axis image;
+    % title('Normalized Output Frame');
+    % drawnow;
 
 end
 
