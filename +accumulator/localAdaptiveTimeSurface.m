@@ -1,6 +1,6 @@
-function [normalized_output_frame, time_surface_map, tau_filtered, decayed_surface, adaptive_gains] = ...
+function [normalized_output_frame, time_surface_map_raw, tau_filtered, decayed_surface, adaptive_gains] = ...
     localAdaptiveTimeSurface(t_mean, time_surface_map_prev, alts_params,...
-    filter_mask, polarity_map)
+    filter_mask, polarity_map, counts)
 
     % Extract parameters
     surface_tau_max      = alts_params.surface_tau_max;
@@ -9,6 +9,8 @@ function [normalized_output_frame, time_surface_map, tau_filtered, decayed_surfa
     dt                   = alts_params.dt;
     recency_filter_sigma = alts_params.recency_filter_sigma;
     recency_filter_size  = alts_params.recency_filter_size;
+    pool_sigma = recency_filter_sigma;
+    pool_filter_size = recency_filter_size;
 
     % Set any NaN values to 0 for computation
     t_mean(isnan(t_mean)) = 0; 
@@ -52,17 +54,65 @@ function [normalized_output_frame, time_surface_map, tau_filtered, decayed_surfa
     % Compute per-pixel blending coefficient (coupled gain + decay)
     adaptive_gains = 1 - exp(-dt ./ tau_effective);
 
-    adaptive_gains = imgaussfilt(adaptive_gains, 5, ...
-         "FilterSize", 7);
+    adaptive_gains = imgaussfilt(adaptive_gains, recency_filter_sigma, ...
+         "FilterSize", recency_filter_size);
    
     % Remap the results
     %masked_input_remapped = process.linearRemap(masked_input,-0.5, 0.5)+0.5;
     
-    % EMA Update
-    time_surface_map = adaptive_gains .* masked_input + (1 - adaptive_gains) .* time_surface_map_prev;
+    % % EMA Update
+    % time_surface_map = adaptive_gains .* masked_input + (1 - adaptive_gains) .* time_surface_map_prev;
+
+    % 1. EMA update (unchanged — controls temporal tracking rate)
+    time_surface_map_raw = adaptive_gains .* masked_input ...
+                         + (1 - adaptive_gains) .* time_surface_map_prev;
     
+    % Decompose into magnitude and sign
+    magnitude = abs(time_surface_map_raw);
+
+    % 2. Build the normalization pool (smoothed local energy)
+    %    abs() because polarity_map is signed
+    activity_pool = imgaussfilt(magnitude, recency_filter_sigma, 'FilterSize', recency_filter_size);
+
+    % Build normalization pool from EVENT COUNTS (unsigned activity)
+    counts_smooth = imgaussfilt(single(counts), pool_sigma, 'FilterSize', pool_filter_size);
+    
+    % 3. Divisive normalization
+    %    sigma controls the crossover: regions with activity >> sigma get
+    %    compressed toward 1/activity_pool; regions with activity << sigma
+    %    pass through nearly unchanged.
+    
+    time_surface_map = zeros(size(masked_input));
+    good_mask = (abs(masked_input)>0);
+    sigma = median(activity_pool(abs(activity_pool)>0));  
+    n = 1.0;        
+
+    % Divisive normalization: signed surface / unsigned activity
+    time_surface_map(good_mask) = time_surface_map_raw(good_mask) ./ (sigma + counts_smooth(good_mask) .^ n);
+    
+    % Simple outlier rejection
+    mean_value_pos = mean(time_surface_map(time_surface_map>0));
+    mean_value_neg = mean(time_surface_map(time_surface_map<0));
+    std_value_pos = std(time_surface_map(time_surface_map>0));
+    std_value_neg = std(time_surface_map(time_surface_map<0));
+
+    % Reject points which are still 3\sigma outside the mean
+    pos_threshold = mean_value_pos + 4*std_value_pos;
+    neg_threshold = mean_value_neg - 4*std_value_neg;
+
+    time_surface_map(time_surface_map>pos_threshold)= median(time_surface_map(time_surface_map>0));
+    time_surface_map(time_surface_map<neg_threshold)= median(time_surface_map(time_surface_map<0));
+
     % Normalize the output frame
     normalized_output_frame = normalizeSurface(time_surface_map, 8, 1.0);
+    % remapped_time_surface = process.linearRemap(time_surface_map, -0.5, 0.5)+0.5;
+    % shift_value = mean(remapped_time_surface((abs(masked_input)==0)))-0.5;
+    % normalized_output_frame = remapped_time_surface-shift_value;
+    % bad_pixels = (normalized_output_frame>0.78 | normalized_output_frame<0.2);
+    % time_surface_map_raw(bad_pixels) = sigma;
+    % 
+    % normalized_output_frame(bad_pixels)=0.5;
+    % normalized_output_frame(bad_pixels)=0.5;
 
 end
 

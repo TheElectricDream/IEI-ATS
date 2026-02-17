@@ -17,8 +17,8 @@ close all;
 
 %% Define processing range
 % Define start and end time to process [seconds]
-t_start_process = 80; 
-t_end_process   = 100; 
+t_start_process = 0; 
+t_end_process   = 1000; 
 
 %% Import events for inspection
 
@@ -76,7 +76,7 @@ filter_output_image         = false;
 
 % Persistent inter-event-interval map (EMA)
 iei_map                     = zeros(imgSz);
-iei_alpha                   = 0.2;     
+iei_alpha                   = 0.8;     
 
 % COHERENCE PARAMETERS
 % --------------------
@@ -100,9 +100,9 @@ filter_by_coherence         = true;
 alts_params.surface_tau_min      = 0.2;
 alts_params.surface_tau_max      = 2.0;
 alts_params.dt                   = t_interval;
-alts_params.recency_filter_size  = 3;
+alts_params.recency_filter_size  = 11;
 alts_params.recency_filter_sigma = 9.0;
-alts_params.surface_tau_release  = 0.2;
+alts_params.surface_tau_release  = 3.0;
 alts_params.iei_low  = 0.001;   % fast-firing threshold [seconds]
 alts_params.iei_high = 0.05;    % slow-firing threshold [seconds]
 alts_activity_score  = zeros(frame_total, 1);
@@ -282,6 +282,7 @@ for frameIndex = 1:frame_total
         %filter_mask = process.sigmoidRemap(single(filtered_coherence_map),0,1);
         filter_mask(isnan(filter_mask)) = 0;
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
+        filter_mask(filter_mask<0.06) = 0;
     else
 
         % Use a unity mask instead
@@ -303,12 +304,12 @@ for frameIndex = 1:frame_total
     % log_t_mean = log1p(iei_map);
     % norm_t_mean_diff = log_t_mean./max(log_t_mean(:));
 
-    [normalized_output_frame, time_surface_map, tau_filtered, decayed_surface, adaptive_gains] = ...
+    [normalized_output_frame, time_surface_map_raw, tau_filtered, decayed_surface, adaptive_gains] = ...
     accumulator.localAdaptiveTimeSurface(iei_map,...
-    time_surface_map_prev, alts_params, filter_mask, polarity_map);
+    time_surface_map_prev, alts_params, filter_mask, polarity_map, counts);
 
     % Set any retention variables
-    time_surface_map_prev = time_surface_map;
+    time_surface_map_prev = time_surface_map_raw;
 
     % Store the adaptive map score
     alts_activity_score(frameIndex) = mean(adaptive_gains(:));
