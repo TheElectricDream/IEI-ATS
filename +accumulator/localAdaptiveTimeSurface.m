@@ -1,4 +1,4 @@
-function [normalized_output_frame, time_surface_map_raw, tau_filtered, decayed_surface, adaptive_gains] = ...
+function [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
     localAdaptiveTimeSurface(t_mean, time_surface_map_prev, alts_params,...
     filter_mask, polarity_map, counts)
 
@@ -9,8 +9,8 @@ function [normalized_output_frame, time_surface_map_raw, tau_filtered, decayed_s
     dt                   = alts_params.dt;
     recency_filter_sigma = alts_params.recency_filter_sigma;
     recency_filter_size  = alts_params.recency_filter_size;
-    pool_sigma = recency_filter_sigma;
-    pool_filter_size = recency_filter_size;
+    pool_sigma           = recency_filter_sigma;
+    pool_filter_size     = recency_filter_size;
 
     % Set any NaN values to 0 for computation
     t_mean(isnan(t_mean)) = 0; 
@@ -34,25 +34,17 @@ function [normalized_output_frame, time_surface_map_raw, tau_filtered, decayed_s
     activity_indicator(isnan(activity_indicator))=0;
 
     % Smooth it spatially so the transition isn't pixel-sharp
-    % activity_blurred = imgaussfilt(activity_indicator, recency_filter_sigma, ...
-    %     "FilterSize", recency_filter_size);
-    % activity_blurred = min(activity_blurred ./ max(activity_blurred(:) + eps), 1.0);
-    se = strel('disk', 1);  % fills 1-pixel gaps, no boundary smear
+    se = strel('disk', 1); 
     activity_blurred = imdilate(activity_indicator, se);
 
     % Active pixels keep tau_active, idle pixels with residual get tau_release
     tau_effective = tau_active .* activity_blurred + ...
                     surface_tau_release .* (1 - activity_blurred);
 
-    % % Apply Adaptive Decay
-    decay_factor = exp(-dt./tau_effective);
-    decayed_surface = time_surface_map_prev .* decay_factor;
-    
-    % % Accumulate
-    % time_surface_map = masked_input + decayed_surface;
-
     % Compute per-pixel blending coefficient (coupled gain + decay)
     adaptive_gains = 1 - exp(-dt ./ tau_effective);
+
+    adaptive_gains(activity_blurred == 0) = 0;
 
     adaptive_gains = imgaussfilt(adaptive_gains, recency_filter_sigma, ...
          "FilterSize", recency_filter_size);
@@ -66,6 +58,8 @@ function [normalized_output_frame, time_surface_map_raw, tau_filtered, decayed_s
     % 1. EMA update (unchanged — controls temporal tracking rate)
     time_surface_map_raw = adaptive_gains .* masked_input ...
                          + (1 - adaptive_gains) .* time_surface_map_prev;
+
+    time_surface_map_raw = time_surface_map_raw.*single(activity_blurred>0);
     
     % Decompose into magnitude and sign
     magnitude = abs(time_surface_map_raw);
@@ -102,6 +96,8 @@ function [normalized_output_frame, time_surface_map_raw, tau_filtered, decayed_s
 
     time_surface_map(time_surface_map>pos_threshold)= median(time_surface_map(time_surface_map>0));
     time_surface_map(time_surface_map<neg_threshold)= median(time_surface_map(time_surface_map<0));
+    time_surface_map_raw(time_surface_map>pos_threshold)= median(time_surface_map_raw(time_surface_map>0));
+    time_surface_map_raw(time_surface_map<neg_threshold)= median(time_surface_map_raw(time_surface_map<0));
 
     % Normalize the output frame
     normalized_output_frame = normalizeSurface(time_surface_map, 8, 1.0);

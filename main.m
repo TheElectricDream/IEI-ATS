@@ -74,21 +74,23 @@ frame_total                 = floor(t_total/t_interval);
 % Boolean controls
 filter_output_image         = false;
 
-% Persistent inter-event-interval map (EMA)
-iei_map                     = zeros(imgSz);
+% INTER-EVENT-INTERVAL
+% --------------------
+% Persistent inter-event-interval map (EMA) parameter
 iei_alpha                   = 0.8;     
+
+% Initialize EMA-IEI 
+iei_map                     = zeros(imgSz);
 
 % COHERENCE PARAMETERS
 % --------------------
-% Define coherence constants
-r_s                         = 30/imgSz(1);  % spatial radius [pixels norm]
+% Define coherence parameters - Must be tuned based on t_interval
+coh_params.r_s                         = 30/imgSz(1);  % spatial radius [pixels norm]
+coh_params.trace_threshold             = 1.3;
+coh_params.persistence_threshold       = 0.0002;
+coh_params.coherence_threshold         = 0.06;
 
-% Coherence thresholds
-similarity_threshold        = 0.0;
-trace_threshold             = 1.3;
-persistence_threshold_high  = 0.0002;
-persistence_threshold_low   = 0.0;
-coherence_threshold         = 0.01;
+% Initialize mask for filter
 filter_mask                 = ones(imgSz);
 
 % Boolean controls
@@ -103,8 +105,6 @@ alts_params.dt                   = t_interval;
 alts_params.recency_filter_size  = 11;
 alts_params.recency_filter_sigma = 9.0;
 alts_params.surface_tau_release  = 3.0;
-alts_params.iei_low  = 0.001;   % fast-firing threshold [seconds]
-alts_params.iei_high = 0.05;    % slow-firing threshold [seconds]
 alts_activity_score  = zeros(frame_total, 1);
 
 % TIME SURFACE PARAMETERS
@@ -261,14 +261,8 @@ for frameIndex = 1:frame_total
 
     [norm_trace_map, norm_similarity_map, norm_persist_map,...
         filtered_coherence_map] = coherence.computeCoherenceMask(sorted_x,...
-        sorted_y, sorted_t, imgSz, r_s, t_interval, unique_idx, pos, ...
-        group_ends, trace_threshold, similarity_threshold, ...
-        persistence_threshold_high, persistence_threshold_low, frameIndex,...
-        norm_trace_map_prev, t_mean_diff);
-
-    % % Use the coherence_threshold to filter the map
-    % filtered_coherence_map = process.sigmoidRemap(filtered_coherence_map, 0, 1);
-    % filtered_coherence_map(filtered_coherence_map<0.0) = nan;
+        sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
+        group_ends, coh_params, frameIndex, norm_trace_map_prev, t_mean_diff);
 
     % Set any retention variables
     norm_trace_map_prev = norm_trace_map;
@@ -276,13 +270,9 @@ for frameIndex = 1:frame_total
     % Choose whether or not to generate a filter
     if filter_by_coherence == true
         filter_mask = filtered_coherence_map;
-
-        %filter_mask = single(imgaussfilt(single(filtered_coherence_map), 5.0, "FilterSize", 9));
-        %filter_mask = single(filtered_coherence_map>0);
-        %filter_mask = process.sigmoidRemap(single(filtered_coherence_map),0,1);
         filter_mask(isnan(filter_mask)) = 0;
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
-        filter_mask(filter_mask<0.06) = 0;
+        filter_mask(filter_mask<coh_params.coherence_threshold) = 0;
     else
 
         % Use a unity mask instead
@@ -304,7 +294,7 @@ for frameIndex = 1:frame_total
     % log_t_mean = log1p(iei_map);
     % norm_t_mean_diff = log_t_mean./max(log_t_mean(:));
 
-    [normalized_output_frame, time_surface_map_raw, tau_filtered, decayed_surface, adaptive_gains] = ...
+    [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
     accumulator.localAdaptiveTimeSurface(iei_map,...
     time_surface_map_prev, alts_params, filter_mask, polarity_map, counts);
 
@@ -312,7 +302,7 @@ for frameIndex = 1:frame_total
     time_surface_map_prev = time_surface_map_raw;
 
     % Store the adaptive map score
-    alts_activity_score(frameIndex) = mean(adaptive_gains(:));
+    alts_activity_score(frameIndex) = mean(adaptive_gains(abs(adaptive_gains)>0));
 
     % ----------------- NUNES GLOBAL ADAPTIVE ACCUMULATION----------------%
     % --------------------------------------------------------------------%
