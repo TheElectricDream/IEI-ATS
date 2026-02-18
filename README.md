@@ -28,7 +28,7 @@ This asynchronous representation offers high temporal resolution (~1 µs), high 
 
 A **time surface** is a 2D map where each pixel stores a decayed representation of when it last fired. The classical exponential time surface takes the form:
 
-$$\mathcal{T}(x, y, t) = \exp\!\left(-\frac{t - t_{\text{last}}(x,y)}{\tau}\right)$$
+$$\mathcal{T}(x, y, t) = \exp\\left(-\frac{t - t_{\text{last}}(x,y)}{\tau}\right)$$
 
 where $\tau$ is a fixed time constant controlling the decay rate. This formulation is described in Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI. IEI-ATS replaces the fixed $\tau$ with a **per-pixel adaptive time constant** derived from local IEI statistics, and replaces the hard reset at each event with an exponential moving average (EMA) update rule.
 
