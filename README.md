@@ -10,6 +10,8 @@ The **Inter-Event-Interval Adaptive Time Surface (IEI-ATS)** is a signal process
 
 The core contribution is a **three-rule coherence filtering framework** that separates real edge events from noise *before* temporal surface accumulation, combined with a **locally adaptive EMA accumulator** driven by per-pixel inter-event-interval (IEI) statistics. The result is a surface that preserves edge sharpness and polarity contrast while eliminating hot pixels, trailing artifacts, and noise-induced residuals.
 
+This work also contributes the [EVent-based Observation of Spacecraft (EVOS)](https://www.frdr-dfdr.ca/repo/dataset/1c83d3dc-3a8c-408b-a6c4-9251c0ec1d05) dataset. This dataset is designed to support research in event-based vision for autonomous on-orbit inspection and space debris removal. The dataset was collected at Carleton University using the Spacecraft Proximity Operations Testbed (SPOT). The data was captured using an IniVation DVXplorer Micro event camera mounted on a stationary chaser spacecraft platform which observes a moving target spacecraft. The observed target is covered in multi-layer insulation and is equipped with a solar panel and a docking cone. The dataset contains 15 unique experiments, each approximately 300 seconds long, featuring distinct trajectories under different lighting conditions. Time-synchronized ground-truth position and velocity data are provided via a PhaseSpace motion capture system with sub-millimeter accuracy.
+
 ---
 
 ## Background
@@ -28,7 +30,7 @@ This asynchronous representation offers high temporal resolution (~1 µs), high 
 
 A **time surface** is a 2D map where each pixel stores a decayed representation of when it last fired. The classical exponential time surface takes the form:
 
-$$\mathcal{T}(x, y, t) = \exp\!\left(-\frac{t - t_{\text{last}}(x,y)}{\tau}\right)$$
+$$\mathcal{T}(x, y, t) = \exp\left(-\frac{t - t_{\text{last}}(x,y)}{\tau}\right)$$
 
 where $\tau$ is a fixed time constant controlling the decay rate. This formulation is described in Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI. IEI-ATS replaces the fixed $\tau$ with a **per-pixel adaptive time constant** derived from local IEI statistics, and replaces the hard reset at each event with an exponential moving average (EMA) update rule.
 
@@ -97,7 +99,7 @@ $$s_\text{reg} = \frac{1}{1 + \text{CV}}$$
 
 An IEI magnitude penalty is then applied to prevent pure-noise regions (where all pixels fire slowly but uniformly) from producing artificially low CV:
 
-$$s_\text{mag} = \exp\!\left(-\frac{\text{IEI}}{2 \cdot \tilde{\text{IEI}}}\right)$$
+$$s_\text{mag} = \exp\left(-\frac{\text{IEI}}{2 \cdot \tilde{\text{IEI}}}\right)$$
 
 where $\tilde{\text{IEI}}$ is the median observed IEI. The combined score is $s = s_\text{reg} \cdot s_\text{mag}$.
 
@@ -119,7 +121,7 @@ Fast-firing pixels (small IEI) receive small $\tau$ (fast decay); slow-firing pi
 
 **EMA update (first-order IIR).** The blending coefficient is computed as:
 
-$$\alpha_\text{eff} = 1 - \exp\!\left(-\frac{\Delta t}{\tau_\text{eff}}\right)$$
+$$\alpha_\text{eff} = 1 - \exp\left(-\frac{\Delta t}{\tau_\text{eff}}\right)$$
 
 This coupling of input gain with decay rate prevents runaway accumulation. The surface update is:
 
@@ -192,10 +194,7 @@ IEI-ATS/
 - **Statistics and Machine Learning Toolbox** — required for `createns`, `knnsearch`, `rangesearch`
 - Event data in **HDF5 format** with datasets: `/timestamp`, `/x`, `/y`, `/polarity`
 
-To convert AEDAT4 recordings to HDF5, see the companion import script:
-```
-/import/importAEDAT4toHDF5.py
-```
+To convert AEDAT4 recordings to HDF5, see the companion import script from the [NEXUS](https://github.com/Carleton-SRL/NEXUS/tree/main/import) repository.
 
 ---
 
@@ -233,9 +232,11 @@ The coherence filter parameters are the most dataset-dependent settings:
 
 | Parameter | Description | Typical Range |
 |---|---|---|
-| `alts_params.surface_tau_min` | Minimum decay constant [s] | `0.05 – 0.5` |
-| `alts_params.surface_tau_max` | Maximum decay constant [s] | `0.5 – 5.0` |
+| `alts_params.dt` | Numerator for the time surface exponential | t_interval |
+| `alts_params.filter_size` | Gaussian blur filter size for ATS | `9 - 11` |
+| `alts_params.filter_sigma` | Gaussian blur filter sigma for ATS | `7.0 - 9.0` |
 | `alts_params.surface_tau_release` | Inactive pixel release constant [s] | `1.0 – 5.0` |
+| ` alts_params.div_norm_exp` | Controls how aggressively high-activity regions get compressed | `0.5 - 1.5` |
 | `iei_alpha` | IEI map EMA smoothing factor | `0.5 – 0.95` |
 
 ### 5. Run
@@ -252,9 +253,9 @@ Output frames are written to `videoWriters{1}` (AVI) and optionally as individua
 
 IEI-ATS includes reference implementations of several published time surface methods for benchmarking:
 
-- **Classical Time Surface** — Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI, 39(7), 1346–1359.
-- **Speed-Invariant Time Surface** — Manderscheid et al. (2019), *"Speed Invariant Time Surface for Learning to Detect Corner Points with Event-Based Cameras,"* Proc. IEEE CVPR. [arXiv:1903.11332](https://arxiv.org/abs/1903.11332)
-- **Adaptive Global Decay (AGD)** — Nunes et al. (2023), *"Adaptive Global Decay Process for Event Cameras,"* Proc. IEEE CVPR. [IEEE](https://ieeexplore.ieee.org/document/10205486/)
+- **Classical Time Surface** — Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI, 39(7), 1346–1359. [IEEE](https://doi.org/10.1109/TPAMI.2016.2574707)
+- **Speed-Invariant Time Surface** — Manderscheid et al. (2019), *"Speed Invariant Time Surface for Learning to Detect Corner Points with Event-Based Cameras,"* Proc. IEEE CVPR. [IEEE](https://doi.org/10.1109/CVPR.2019.01049)
+- **Adaptive Global Decay (AGD)** — Nunes et al. (2023), *"Adaptive Global Decay Process for Event Cameras,"* Proc. IEEE CVPR. [IEEE](https://doi.org/10.1109/CVPR52729.2023.00942)
 
 ---
 
@@ -266,14 +267,30 @@ MIT License. Copyright (c) 2026 Alexander Crain. See [LICENSE](LICENSE) for deta
 
 ## Citation
 
-If you use IEI-ATS in your research, please cite:
+If you use IEI-ATS in your research, please cite us!
 
 ```bibtex
-@software{crain2026ieats,
-  author  = {Crain, Alexander},
-  title   = {{IEI-ATS}: Inter-Event-Interval Adaptive Time Surface},
-  year    = {2026},
-  url     = {https://github.com/[your-github]/IEI-ATS},
-  license = {MIT}
+@inproceedings{crain2026ieats,
+  author    = {Crain, Alexander and Ulrich, Steve},
+  title     = {Event-Based Spacecraft Representation Using Inter-Event-Interval Adaptive Time Surfaces},
+  booktitle = {36th AIAA/AAS Space Flight Mechanics Meeting},
+  address   = {Orlando, FL},
+  month     = jan,
+  year      = {2026},
+  note      = {AIAA/AAS SFM 2026}
+}
+```
+
+If you use the EVOS dataset in your research, please use this citation instead:
+
+```bibtex
+@misc{crain2025evos,
+  author    = {Crain, Alexander and Ulrich, Steve},
+  title     = {{EVent-based Observation of Spacecraft (EVOS)}: A Neuromorphic Dataset for Spacecraft Proximity Operations},
+  year      = {2025},
+  publisher = {Federated Research Data Repository},
+  doi       = {10.20383/103.01538},
+  url       = {https://doi.org/10.20383/103.01538},
+  license   = {CC BY 4.0}
 }
 ```
