@@ -106,6 +106,7 @@ alts_params.recency_filter_size  = 11;
 alts_params.recency_filter_sigma = 9.0;
 alts_params.surface_tau_release  = 3.0;
 alts_activity_score  = zeros(frame_total, 1);
+alts_frame_storage   = {};
 
 % TIME SURFACE PARAMETERS
 % -----------------------
@@ -334,10 +335,9 @@ for frameIndex = 1:frame_total
 
     % ------------------------ EXPORTING VIDEO ---------------------------%
     % --------------------------------------------------------------------%
-    % normalized_output_frame(normalized_output_frame==1)=0.5;
-    % filtered_coherence_map(isnan(filtered_coherence_map))=0;
-    % normalized_output_frame = normalized_output_frame.*filtered_coherence_map;
     
+    % Store the processed frames for later use
+    alts_frame_storage{frameIndex} = normalized_output_frame;
 
     % Convert to uint8 (0-255 range)
     grayscale_normalized_output_frame = ...
