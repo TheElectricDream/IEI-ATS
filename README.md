@@ -2,6 +2,11 @@
 
 > An adaptive local time surface algorithm for neuromorphic event camera data, featuring coherence-based noise filtering and temporal surface accumulation in MATLAB.
 
+<div align="center">
+    <img src="assets/iei-ats-demo.gif" alt="Demo"/>
+    <p><strong>Figure 1.</strong> <em>IEI-ATS output surface on the EVOS dataset. Rotating target spacecraft under nominal lighting conditions.</em></p>
+</div>
+
 ---
 
 ## Overview
