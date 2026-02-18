@@ -10,6 +10,8 @@ The **Inter-Event-Interval Adaptive Time Surface (IEI-ATS)** is a signal process
 
 The core contribution is a **three-rule coherence filtering framework** that separates real edge events from noise *before* temporal surface accumulation, combined with a **locally adaptive EMA accumulator** driven by per-pixel inter-event-interval (IEI) statistics. The result is a surface that preserves edge sharpness and polarity contrast while eliminating hot pixels, trailing artifacts, and noise-induced residuals.
 
+This work also contributes the [EVent-based Observation of Spacecraft (EVOS)](https://www.frdr-dfdr.ca/repo/dataset/1c83d3dc-3a8c-408b-a6c4-9251c0ec1d05) dataset. This dataset is designed to support research in event-based vision for autonomous on-orbit inspection and space debris removal. The dataset was collected at Carleton University using the Spacecraft Proximity Operations Testbed (SPOT). The data was captured using an IniVation DVXplorer Micro event camera mounted on a stationary chaser spacecraft platform which observes a moving target spacecraft. The observed target is covered in multi-layer insulation and is equipped with a solar panel and a docking cone. The dataset contains 15 unique experiments, each approximately 300 seconds long, featuring distinct trajectories under different lighting conditions. Time-synchronized ground-truth position and velocity data are provided via a PhaseSpace motion capture system with sub-millimeter accuracy.
+
 ---
 
 ## Background
@@ -265,7 +267,7 @@ MIT License. Copyright (c) 2026 Alexander Crain. See [LICENSE](LICENSE) for deta
 
 ## Citation
 
-If you use IEI-ATS in your research, please cite:
+If you use IEI-ATS in your research, please cite us!
 
 ```bibtex
 @inproceedings{crain2026ieats,
@@ -276,5 +278,19 @@ If you use IEI-ATS in your research, please cite:
   month     = jan,
   year      = {2026},
   note      = {AIAA/AAS SFM 2026}
+}
+```
+
+If you use the EVOS dataset in your research, please use this citation instead:
+
+```bibtex
+@misc{crain2025evos,
+  author    = {Crain, Alexander and Ulrich, Steve},
+  title     = {{EVent-based Observation of Spacecraft (EVOS)}: A Neuromorphic Dataset for Spacecraft Proximity Operations},
+  year      = {2025},
+  publisher = {Federated Research Data Repository},
+  doi       = {10.20383/103.01538},
+  url       = {https://doi.org/10.20383/103.01538},
+  license   = {CC BY 4.0}
 }
 ```
