@@ -268,11 +268,13 @@ MIT License. Copyright (c) 2026 Alexander Crain. See [LICENSE](LICENSE) for deta
 If you use IEI-ATS in your research, please cite:
 
 ```bibtex
-@software{crain2026ieats,
-  author  = {Crain, Alexander},
-  title   = {{IEI-ATS}: Inter-Event-Interval Adaptive Time Surface},
-  year    = {2026},
-  url     = {https://github.com/[your-github]/IEI-ATS},
-  license = {MIT}
+@inproceedings{crain2026ieats,
+  author    = {Crain, Alexander and Ulrich, Steve},
+  title     = {Event-Based Spacecraft Representation Using Inter-Event-Interval Adaptive Time Surfaces},
+  booktitle = {36th AIAA/AAS Space Flight Mechanics Meeting},
+  address   = {Orlando, FL},
+  month     = jan,
+  year      = {2026},
+  note      = {AIAA/AAS SFM 2026}
 }
 ```
