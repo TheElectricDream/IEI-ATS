@@ -99,14 +99,17 @@ filter_by_coherence         = true;
 % ADAPTIVE LOCAL TIME-SURFACE PARAMETERS
 % --------------------------------------
 % Set adaptive local time-surface parameters
-alts_params.surface_tau_min      = 0.2;
-alts_params.surface_tau_max      = 2.0;
 alts_params.dt                   = t_interval;
-alts_params.recency_filter_size  = 11;
-alts_params.recency_filter_sigma = 9.0;
+alts_params.filter_size          = 11;
+alts_params.filter_sigma         = 9.0;
 alts_params.surface_tau_release  = 3.0;
-alts_activity_score  = zeros(frame_total, 1);
-alts_frame_storage   = {};
+alts_params.div_norm_exp         = 1.0;
+alts_activity_score.mean         = zeros(frame_total, 1);
+alts_activity_score.median       = zeros(frame_total, 1);
+alts_activity_score.std          = zeros(frame_total, 1);
+
+% Create a cell array to store per-frame data (preallocate for frame_total)
+alts_frame_storage      = cell(frame_total,1);
 
 % TIME SURFACE PARAMETERS
 % -----------------------
@@ -260,16 +263,18 @@ for frameIndex = 1:frame_total
     % ---------------------- EVENT COHERENCE -----------------------------%
     % --------------------------------------------------------------------%
 
-    [norm_trace_map, norm_similarity_map, norm_persist_map,...
-        filtered_coherence_map] = coherence.computeCoherenceMask(sorted_x,...
-        sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
-        group_ends, coh_params, frameIndex, norm_trace_map_prev, t_mean_diff);
-
-    % Set any retention variables
-    norm_trace_map_prev = norm_trace_map;
-
     % Choose whether or not to generate a filter
     if filter_by_coherence == true
+
+        [norm_trace_map, norm_similarity_map, norm_persist_map,...
+            filtered_coherence_map] = coherence.computeCoherenceMask(sorted_x,...
+            sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
+            group_ends, coh_params, frameIndex, norm_trace_map_prev, t_mean_diff);
+    
+        % Set any retention variables
+        norm_trace_map_prev = norm_trace_map;
+
+        % Create the filter
         filter_mask = filtered_coherence_map;
         filter_mask(isnan(filter_mask)) = 0;
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
@@ -288,13 +293,6 @@ for frameIndex = 1:frame_total
     % If multiple events land on one pixel, we sum their polarities (e.g., +1 +1 -1 = +1)
     polarity_map = accumarray([sorted_x, sorted_y], p_signed, imgSz, @sum, 0);
 
-    % Normalize the timestamp 
-    % Note: Tried this function out of curiosity
-    % https://www.mathworks.com/help/images/ref/entropyfilt.html
-    %t_entropy_mean = entropyfilt(iei_map);
-    % log_t_mean = log1p(iei_map);
-    % norm_t_mean_diff = log_t_mean./max(log_t_mean(:));
-
     [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
     accumulator.localAdaptiveTimeSurface(iei_map,...
     time_surface_map_prev, alts_params, filter_mask, polarity_map, counts);
@@ -303,7 +301,9 @@ for frameIndex = 1:frame_total
     time_surface_map_prev = time_surface_map_raw;
 
     % Store the adaptive map score
-    alts_activity_score(frameIndex) = mean(adaptive_gains(abs(adaptive_gains)>0));
+    alts_activity_score.mean(frameIndex) = mean(adaptive_gains(abs(adaptive_gains)>0));
+    alts_activity_score.median(frameIndex) = median(adaptive_gains(abs(adaptive_gains)>0));
+    alts_activity_score.std(frameIndex) = std(adaptive_gains(abs(adaptive_gains)>0));
 
     % ----------------- NUNES GLOBAL ADAPTIVE ACCUMULATION----------------%
     % --------------------------------------------------------------------%
@@ -370,17 +370,8 @@ for frameIndex = 1:frame_total
         end
         % Build filename with zero-padded frame index
         fname = fullfile(frameOutputFolder, sprintf('frame_%05d.png', frameIndex));
-        % Write the PNG. imwrite expects HxWx1 or HxWx3; transpose to match display
         imwrite(grayscale_normalized_output_frame', fname);
     end
-
-    % if cohOut
-    %     % Capture the frame
-    %     set(hImgs{2}, 'CData', coherence_map');
-    %     set(hImgs{2}, 'AlphaData', ~isnan(coherence_map'));
-    %     set(hAxs{2}, 'Visible','off');
-    %     writeVideo(videoWriters{2}, getframe(hFigs{2})); 
-    % end
 
     % Print progress
     stats.printPercentComplete(frameIndex, frame_total, frame_time(frameIndex));
@@ -391,3 +382,5 @@ end
 for videosIdx = 1:length(videoWriters)
     close(videoWriters{videosIdx});
 end
+
+
