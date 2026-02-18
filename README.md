@@ -28,7 +28,7 @@ This asynchronous representation offers high temporal resolution (~1 µs), high 
 
 A **time surface** is a 2D map where each pixel stores a decayed representation of when it last fired. The classical exponential time surface takes the form:
 
-$$\mathcal{T}(x, y, t) = \exp\\left(-\frac{t - t_{\text{last}}(x,y)}{\tau}\right)$$
+$$\mathcal{T}(x, y, t) = \exp\left(-\frac{t - t_{\text{last}}(x,y)}{\tau}\right)$$
 
 where $\tau$ is a fixed time constant controlling the decay rate. This formulation is described in Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI. IEI-ATS replaces the fixed $\tau$ with a **per-pixel adaptive time constant** derived from local IEI statistics, and replaces the hard reset at each event with an exponential moving average (EMA) update rule.
 
@@ -97,7 +97,7 @@ $$s_\text{reg} = \frac{1}{1 + \text{CV}}$$
 
 An IEI magnitude penalty is then applied to prevent pure-noise regions (where all pixels fire slowly but uniformly) from producing artificially low CV:
 
-$$s_\text{mag} = \exp\!\left(-\frac{\text{IEI}}{2 \cdot \tilde{\text{IEI}}}\right)$$
+$$s_\text{mag} = \exp\left(-\frac{\text{IEI}}{2 \cdot \tilde{\text{IEI}}}\right)$$
 
 where $\tilde{\text{IEI}}$ is the median observed IEI. The combined score is $s = s_\text{reg} \cdot s_\text{mag}$.
 
@@ -119,7 +119,7 @@ Fast-firing pixels (small IEI) receive small $\tau$ (fast decay); slow-firing pi
 
 **EMA update (first-order IIR).** The blending coefficient is computed as:
 
-$$\alpha_\text{eff} = 1 - \exp\!\left(-\frac{\Delta t}{\tau_\text{eff}}\right)$$
+$$\alpha_\text{eff} = 1 - \exp\left(-\frac{\Delta t}{\tau_\text{eff}}\right)$$
 
 This coupling of input gain with decay rate prevents runaway accumulation. The surface update is:
 
