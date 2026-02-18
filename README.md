@@ -192,10 +192,7 @@ IEI-ATS/
 - **Statistics and Machine Learning Toolbox** — required for `createns`, `knnsearch`, `rangesearch`
 - Event data in **HDF5 format** with datasets: `/timestamp`, `/x`, `/y`, `/polarity`
 
-To convert AEDAT4 recordings to HDF5, see the companion import script:
-```
-/import/importAEDAT4toHDF5.py
-```
+To convert AEDAT4 recordings to HDF5, see the companion import script from the [NEXUS](https://github.com/Carleton-SRL/NEXUS/tree/main/import) repository.
 
 ---
 
