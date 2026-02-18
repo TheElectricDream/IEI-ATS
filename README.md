@@ -118,7 +118,7 @@ The ALTS accumulator applies an **asymmetric attack-release envelope** driven by
 
 **Time constant mapping.** The per-pixel IEI is mapped to an effective decay time constant $\tau$ via a sigmoid remap:
 
-$$\tau_\text{active}(x, y) = \sigma_\text{remap}\!\left(\text{IEI}(x,y),\ \tau_\text{min},\ \tau_\text{max}\right)$$
+$$\tau_\text{active}(x, y) = \sigma_\text{remap}\left(\text{IEI}(x,y),\ \tau_\text{min},\ \tau_\text{max}\right)$$
 
 Fast-firing pixels (small IEI) receive small $\tau$ (fast decay); slow-firing pixels receive large $\tau$ (long memory).
 
