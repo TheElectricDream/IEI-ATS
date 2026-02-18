@@ -251,9 +251,9 @@ Output frames are written to `videoWriters{1}` (AVI) and optionally as individua
 
 IEI-ATS includes reference implementations of several published time surface methods for benchmarking:
 
-- **Classical Time Surface** — Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI, 39(7), 1346–1359.
-- **Speed-Invariant Time Surface** — Manderscheid et al. (2019), *"Speed Invariant Time Surface for Learning to Detect Corner Points with Event-Based Cameras,"* Proc. IEEE CVPR. [arXiv:1903.11332](https://arxiv.org/abs/1903.11332)
-- **Adaptive Global Decay (AGD)** — Nunes et al. (2023), *"Adaptive Global Decay Process for Event Cameras,"* Proc. IEEE CVPR. [IEEE](https://ieeexplore.ieee.org/document/10205486/)
+- **Classical Time Surface** — Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI, 39(7), 1346–1359. [IEEE](https://doi.org/10.1109/TPAMI.2016.2574707)
+- **Speed-Invariant Time Surface** — Manderscheid et al. (2019), *"Speed Invariant Time Surface for Learning to Detect Corner Points with Event-Based Cameras,"* Proc. IEEE CVPR. [IEEE](https://doi.org/10.1109/CVPR.2019.01049)
+- **Adaptive Global Decay (AGD)** — Nunes et al. (2023), *"Adaptive Global Decay Process for Event Cameras,"* Proc. IEEE CVPR. [IEEE](https://doi.org/10.1109/CVPR52729.2023.00942)
 
 ---
 
