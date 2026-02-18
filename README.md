@@ -230,9 +230,11 @@ The coherence filter parameters are the most dataset-dependent settings:
 
 | Parameter | Description | Typical Range |
 |---|---|---|
-| `alts_params.surface_tau_min` | Minimum decay constant [s] | `0.05 – 0.5` |
-| `alts_params.surface_tau_max` | Maximum decay constant [s] | `0.5 – 5.0` |
+| `alts_params.dt` | Numerator for the time surface exponential | t_interval |
+| `alts_params.filter_size` | Gaussian blur filter size for ATS | `9 - 11` |
+| `alts_params.filter_sigma` | Gaussian blur filter sigma for ATS | `7.0 - 9.0` |
 | `alts_params.surface_tau_release` | Inactive pixel release constant [s] | `1.0 – 5.0` |
+| ` alts_params.div_norm_exp` | Controls how aggressively high-activity regions get compressed | `0.5 - 1.5` |
 | `iei_alpha` | IEI map EMA smoothing factor | `0.5 – 0.95` |
 
 ### 5. Run
