@@ -9,6 +9,9 @@
 
 ---
 
+> [!IMPORTANT]
+> This repository represents the _current best implementation_ of the IEI-ATS algorithm. This means that the algorithm is an improced version of the one described in the related publication (Event-Based Spacecraft Representation Using Inter-Event-Interval Adaptive Time Surfaces). However, the core principle of the approach remains the same.
+
 ## Overview
 
 The **Inter-Event-Interval Adaptive Time Surface (IEI-ATS)** is a signal processing framework for event-based vision sensors (event cameras / DVS). Unlike conventional frame-based cameras, event cameras asynchronously report per-pixel brightness changes, producing a sparse stream of events `(x, y, t, p)`. IEI-ATS converts this stream into a perceptually coherent, noise-suppressed surface representation suitable for downstream computer vision tasks.
