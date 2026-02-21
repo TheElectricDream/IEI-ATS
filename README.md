@@ -37,7 +37,11 @@ A **time surface** is a 2D map where each pixel stores a decayed representation 
 
 $$\mathcal{T}(x, y, t) = \exp\left(-\frac{t - t_{\text{last}}(x,y)}{\tau}\right)$$
 
-where $\tau$ is a fixed time constant controlling the decay rate. This formulation is described in Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI. IEI-ATS replaces the fixed $\tau$ with a **per-pixel adaptive time constant** derived from local IEI statistics, and replaces the hard reset at each event with an exponential moving average (EMA) update rule.
+where $\tau$ is a fixed time constant controlling the decay rate. This formulation is described in Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI. 
+
+The work by Nunes et al. (2023), *"Adaptive Global Decay Process for Event Cameras,"* Proc. IEEE CVPR. is a recent improvement on the HOTS approach which adapts the parameter $$\tau$$ based on the current scene activity. However, this adaptive parameter is _global_.
+
+IEI-ATS replaces the fixed $\tau$ with a **per-pixel adaptive time constant** derived from local IEI statistics, and replaces the hard reset at each event with an exponential moving average (EMA) update rule.
 
 ---
 
@@ -94,7 +98,7 @@ Active regions are expected to persist across consecutive frames. For each activ
 
 #### Rule 3: IEI Regularity (Similarity Map)
 
-Real edges sweeping across the sensor produce spatially coherent firing rates — adjacent pixels along an edge fire at similar inter-event intervals. Noise events fire at uncorrelated rates relative to their neighbors. The **Coefficient of Variation** (CV = σ/μ) of the local IEI neighborhood is computed via normalized convolution:
+Real edges sweeping across the sensor produce spatially coherent firing rates — adjacent pixels along an edge fire at similar inter-event intervals. Noise events fire at uncorrelated rates relative to their neighbors. The **Coefficient of Variation** (CV = σ/μ) of the local IEI neighborhood is computed via normalized convolution over the **current-frame mean inter-event interval map** (`t_mean_diff`). Note that this is distinct from the persistent EMA IEI map (`iei_map`) used as the time constant input to the ALTS accumulator in Stage 3: the coherence rule uses the raw within-frame IEI estimate to evaluate instantaneous spatial regularity, while the accumulator uses the smoothed multi-frame history to set decay rates. Using the current-frame estimate for coherence scoring avoids latency introduced by EMA smoothing, which would delay the filter's response to newly appearing edges.
 
 $$\text{CV}(x, y) = \frac{\sigma_\text{local}(x, y)}{\mu_\text{local}(x, y)}$$
 
@@ -116,15 +120,17 @@ The three scores are summed and thresholded at `coherence_threshold` to produce 
 
 The ALTS accumulator applies an **asymmetric attack-release envelope** driven by the local IEI statistics:
 
-**Time constant mapping.** The per-pixel IEI is mapped to an effective decay time constant $\tau$ via a sigmoid remap:
+**1) Time constant mapping:** The per-pixel IEI is used directly as the effective decay time constant:
 
-$$\tau_\text{active}(x, y) = \sigma_\text{remap}\left(\text{IEI}(x,y),\ \tau_\text{min},\ \tau_\text{max}\right)$$
+$$\tau_\text{active}(x, y) = \max\left(\hat{\text{IEI}}(x,y),\ \varepsilon\right)$$
 
-Fast-firing pixels (small IEI) receive small $\tau$ (fast decay); slow-firing pixels receive large $\tau$ (long memory).
+where $\hat{\text{IEI}}$ is the persistent EMA-smoothed inter-event interval map and $\varepsilon$ is a small constant to prevent division by zero. Fast-firing pixels (small IEI) naturally receive small $\tau$ (fast decay); slow-firing pixels receive large $\tau$ (long memory). The active time constant is spatially smoothed with a Gaussian kernel before use to prevent pixel-sharp transitions in the envelope.
 
-**Attack-release envelope.** Active pixels (passing the coherence filter) use $\tau_\text{active}$; inactive pixels with residual surface energy use the fixed release constant $\tau_\text{release} \gg \tau_\text{active}$. This eliminates trailing artifacts from fast-moving edges.
+**2) Attack-release envelope.** An activity indicator is constructed from the coherence-filtered polarity input and expanded spatially via **morphological dilation** with a disk structuring element of radius 1. This dilation bridges sub-pixel gaps between active pixels without introducing the amplitude amplification that Gaussian smoothing of a binary mask would cause. Active pixels (within the dilated mask) use $\tau_\text{active}$; idle pixels use the fixed release constant $\tau_\text{release} \gg \tau_\text{active}$. The blending coefficient $\alpha_\text{eff}$ is then Gaussian-smoothed to soften the spatial boundary of the envelope and prevent pixel-sharp transitions in the output surface. This asymmetric attack-release design eliminates trailing artifacts from fast-moving edges.
 
-**EMA update (first-order IIR).** The blending coefficient is computed as:
+Inactive pixels (those outside the dilated activity mask) are explicitly zeroed out after the EMA update. This is an intentional design choice: rather than holding the previous surface value, idle pixels are suppressed immediately, which eliminates trailing artifacts from fast-moving edges. The coherence filter and activity mask together ensure that real persistent edges are never incorrectly classified as inactive.
+
+**3) EMA update (first-order IIR).** The blending coefficient is computed as:
 
 $$\alpha_\text{eff} = 1 - \exp\left(-\frac{\Delta t}{\tau_\text{eff}}\right)$$
 
@@ -134,13 +140,27 @@ $$S_t = \alpha_\text{eff} \cdot u_t + (1 - \alpha_\text{eff}) \cdot S_{t-1}$$
 
 where $u_t$ is the signed polarity input at the current frame. Active pixels with $\alpha_\text{eff} = 0$ implement a **sample-and-hold**: the previous value is preserved exactly without decay.
 
-**Divisive normalization.** The raw EMA surface is normalized using a variant of the canonical divisive normalization model from Carandini & Heeger (2012), *"Normalization as a canonical neural computation,"* Nature Reviews Neuroscience, 13, 51–62:
+**4) Divisive normalization.** The raw EMA surface is normalized using a variant of the canonical divisive normalization model (Carandini & Heeger, 2012, *"Normalization as a canonical neural computation,"* Nature Reviews Neuroscience, 13, 51–62):
 
-$$\hat{S}(x,y) = \frac{S(x,y)}{\sigma + C_\text{smooth}(x,y)^n}$$
+$$\hat{S}(x,y) = \frac{S(x,y)}{\sigma_t + C_\text{smooth}(x,y)^n}$$
 
-where $C_\text{smooth}$ is a spatially pooled event count map, $\sigma$ is the median activity level, and $n = 1$. This compresses the dynamic range without the feedback-loop artifacts that arise when normalized output is fed back into the EMA state.
+where $C_\text{smooth}$ is a spatially pooled event count map, $n$ is a compression exponent (`div_norm_exp`, default $1.0$), and $\sigma_t$ is a **per-frame dynamic scale** computed as the median of the spatially smoothed EMA magnitude over all active pixels:
 
-**Tone mapping.** The final output is rendered using an edge-aware base-detail decomposition. The base layer is compressed via $\tanh$; the detail layer is recombined at a separately controllable boost factor. This prevents flicker artifacts that arise from whole-image normalization.
+$$\sigma_t = \text{median}\left(|S_\text{smooth}(x,y)| : |S_\text{smooth}(x,y)| > 0\\right)$$
+
+This makes the normalization auto-scaling: $\sigma_t$ tracks the typical activity level of the scene each frame rather than requiring a manually tuned fixed value. High-activity regions where $C_\text{smooth} \gg \sigma_t$ are compressed toward $1/C_\text{smooth}^n$; low-activity regions where $C_\text{smooth} \ll \sigma_t$ pass through nearly unchanged. Critically, the normalization is applied to a separate copy of the surface and the normalized output is never fed back into the EMA state, which prevents the self-reinforcing residuals that arise from feedback-coupled normalization.
+
+**5) Outlier rejection.** After divisive normalization, a per-polarity $4\sigma$ clipping step is applied to remove residual extreme values:
+
+$$S_\text{clip}(x,y) = \begin{cases} \tilde{S}^+ & \text{if } S(x,y) > \mu^+ + 4\sigma^+ \\ \tilde{S}^- & \text{if } S(x,y) < \mu^- - 4\sigma^- \\ S(x,y) & \text{otherwise} \end{cases}$$
+
+where $\mu^+$, $\sigma^+$ and $\mu^-$, $\sigma^-$ are the mean and standard deviation computed separately over positive and negative surface values, and $\tilde{S}^+$, $\tilde{S}^-$ are the corresponding per-polarity medians. Clipped values are replaced with the polarity median rather than a hard bound to avoid introducing discontinuities. This step handles hot pixels and isolated coherence filter leakage that survive into the normalized surface.
+
+**6) Tone mapping.** The final output is mapped to $[0, 1]$ using a fixed symmetric hyperbolic tangent tone curve centred at $0.5$:
+
+$$\hat{S}_\text{out}(x, y) = 0.5 + 0.5 \cdot \tanh\left(\frac{\hat{S}(x,y)}{s}\right)$$
+
+where $s$ is a scalar scale parameter controlling contrast (`scale = 3` by default). Larger $s$ produces a softer curve with more headroom for extreme values; smaller $s$ increases contrast in quiet regions. A zero-valued surface maps exactly to $0.5$ (mid-gray), preserving the signed polarity symmetry of the surface. This approach follows the sigmoid tone compression operator described in Reinhard et al. (2002), *"Photographic Tone Reproduction for Digital Images,"* ACM SIGGRAPH.
 
 ---
 
