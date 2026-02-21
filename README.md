@@ -10,7 +10,7 @@
 ---
 
 > [!IMPORTANT]
-> This repository represents the _current best implementation_ of the IEI-ATS algorithm. This means that the algorithm is an improced version of the one described in the related publication (Event-Based Spacecraft Representation Using Inter-Event-Interval Adaptive Time Surfaces). However, the core principle of the approach remains the same.
+> This repository represents the _current best implementation_ of the IEI-ATS algorithm. This means that the algorithm is an improved version of the one described in the related publication (Event-Based Spacecraft Representation Using Inter-Event-Interval Adaptive Time Surfaces). However, the core principle of the approach remains the same.
 
 ## Overview
 
