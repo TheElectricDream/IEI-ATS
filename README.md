@@ -153,11 +153,7 @@ $$\sigma_t = \text{median}\left(|S_\text{smooth}(x,y)| : |S_\text{smooth}(x,y)| 
 
 This makes the normalization auto-scaling: $\sigma_t$ tracks the typical activity level of the scene each frame rather than requiring a manually tuned fixed value. High-activity regions where $C_\text{smooth} \gg \sigma_t$ are compressed toward $1/C_\text{smooth}^n$; low-activity regions where $C_\text{smooth} \ll \sigma_t$ pass through nearly unchanged. Critically, the normalization is applied to a separate copy of the surface and the normalized output is never fed back into the EMA state, which prevents the self-reinforcing residuals that arise from feedback-coupled normalization.
 
-**5) Outlier rejection.** After divisive normalization, a per-polarity $4\sigma$ clipping step is applied to remove residual extreme values:
-
-$$S_\text{clip}(x,y) = \begin{cases} \tilde{S}^+ & \text{if } S(x,y) > \mu^+ + 4\sigma^+ \\ \tilde{S}^- & \text{if } S(x,y) < \mu^- - 4\sigma^- \\ S(x,y) & \text{otherwise} \end{cases}$$
-
-where $\mu^+$, $\sigma^+$ and $\mu^-$, $\sigma^-$ are the mean and standard deviation computed separately over positive and negative surface values, and $\tilde{S}^+$, $\tilde{S}^-$ are the corresponding per-polarity medians. Clipped values are replaced with the polarity median rather than a hard bound to avoid introducing discontinuities. This step handles hot pixels and isolated coherence filter leakage that survive into the normalized surface.
+**5) Outlier rejection.** After divisive normalization, a per-polarity $4\sigma$ clipping step is applied to remove residual extreme values. Clipped values are replaced with the polarity median rather than a hard bound to avoid introducing discontinuities. This step handles hot pixels and isolated coherence filter leakage that survive into the normalized surface.
 
 **6) Tone mapping.** The final output is mapped to $[0, 1]$ using a fixed symmetric hyperbolic tangent tone curve centred at $0.5$:
 
