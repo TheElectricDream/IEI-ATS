@@ -89,6 +89,7 @@ coh_params.r_s                         = 30/imgSz(1);  % spatial radius [pixels 
 coh_params.trace_threshold             = 1.3;
 coh_params.persistence_threshold       = 0.0002;
 coh_params.coherence_threshold         = 0.06;
+coh_params.similarity_threshold        = 0.5;
 
 % Initialize mask for filter
 filter_mask                 = ones(imgSz);
