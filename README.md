@@ -113,7 +113,7 @@ An IEI magnitude penalty is then applied to prevent pure-noise regions (where al
 
 $$s_\text{mag} = \exp\left(-\frac{\text{IEI}}{2 \cdot \tilde{\text{IEI}}}\right)$$
 
-where $\tilde{\text{IEI}}$ is the median observed IEI. The combined score is $s = s_\text{reg} \cdot s_\text{mag}$.
+where $\tilde{\text{IEI}}$ is the median observed IEI. The combined score is $s = s_\text{reg} \cdot s_\text{mag}$, and values below `similarity_threshold` are discarded.
 
 The normalized convolution approach follows Knutsson & Westin (1993), *"Normalized and Differential Convolution,"* Proc. IEEE CVPR, pp. 515–523.
 
@@ -254,6 +254,7 @@ The coherence filter parameters are the most dataset-dependent settings:
 | `coh_params.r_s` | Spatial density search radius (normalized) | `0.02 – 0.08` |
 | `coh_params.trace_threshold` | Min neighbour distance sum to pass density rule | `0.5 – 3.0` |
 | `coh_params.persistence_threshold` | Max cross-frame distance to pass persistence rule | `0.0001 – 0.001` |
+| `coh_params.similarity_threshold` | Max similarity score to pass similarity rule | `0.4 – 0.6` |
 | `coh_params.coherence_threshold` | Combined score threshold for filter mask | `0.03 – 0.15` |
 
 ### 4. Tune time surface parameters
