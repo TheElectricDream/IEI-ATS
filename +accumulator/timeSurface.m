@@ -1,51 +1,77 @@
-function [last_t_map, normalized_output_frame] = timeSurface(last_t_map, x, y, t, imgSz, ts_time_constant)
-%timeSurface Update timestamp map and compute exponential decayed surface.
-%   [LAST_T_MAP, NORMALIZED_OUTPUT_FRAME] = TIMESURFACE(LAST_T_MAP, X, Y, T, IMGSZ, TS_TIME_CONSTANT)
-%   updates the timestamp map LAST_T_MAP at coordinates (X,Y) with timestamps T
-%   and returns the normalized exponential decayed surface NORMALIZED_OUTPUT_FRAME computed using
-%   time constant TS_TIME_CONSTANT. IMGSZ is the image size used for indexing.
+function [last_t_map, normalized_output_frame] = ...
+    timeSurface(last_t_map, x, y, t, imgSz, ts_time_constant)
+% TIMESURFACE  Classical exponential-decay time surface.
+%
+%   [LAST_T_MAP, NORMALIZED_OUTPUT_FRAME] = TIMESURFACE(LAST_T_MAP,
+%   X, Y, T, IMGSZ, TS_TIME_CONSTANT) updates the per-pixel timestamp
+%   map and computes the exponential-decay time surface at t_now.
+%
+%   Reference:
+%       Lagorce et al., "HOTS: A Hierarchy of Event-Based
+%       Time-Surfaces for Pattern Recognition," IEEE T-PAMI,
+%       vol. 39, no. 7, pp. 1346-1359, 2017.
+%       DOI: 10.1109/TPAMI.2016.2574707
 %
 %   Inputs:
-%     LAST_T_MAP        - matrix of previous timestamps sized IMGSZ
-%     X, Y              - vectors of row and column coordinates (same length)
-%     T                 - vector of timestamps corresponding to (X,Y)
-%     IMGSZ             - two-element vector [nrows, ncols]
-%     TS_TIME_CONSTANT  - positive scalar time constant for exponential decay
+%     last_t_map       - [imgSz] Previous timestamp map. Initialize
+%                        with -inf(imgSz) so unvisited pixels decay
+%                        to zero.
+%     x, y             - [N x 1] Pixel coordinates (row, col).
+%     t                - [N x 1] Timestamps [s]. Scalar is broadcast.
+%     imgSz            - [1 x 2] Image dimensions [nRows, nCols].
+%     ts_time_constant - Scalar decay time constant tau [s].
 %
 %   Outputs:
-%     LAST_T_MAP        - updated timestamp map
-%     DECAYED_SURFACE   - matrix of same size as LAST_T_MAP containing
-%                         exp(-(t_now - LAST_T_MAP)/TS_TIME_CONSTANT)
+%     last_t_map              - [imgSz] Updated timestamp map.
+%     normalized_output_frame - [imgSz] Display surface in [0, 1].
+%
+%   Algorithm:
+%     1. Overwrite timestamps at event locations (reset-based).
+%     2. Compute surface: exp(-(t_now - t_last) / tau).
 %
 %   Notes:
-%     - Coordinates X and Y are expected to be within the image bounds.
-%     - The function uses linear indexing via SUB2IND for assignment.
+%     - Reset-based: each event overwrites the stored timestamp.
+%     - Unsigned output in [0, 1]. Direct passthrough (no rescaling).
+%     - Coordinates: x = row, y = col, sub2ind(imgSz, x, y).
+%
+%   See also: accumulator.adaptiveGlobalDecay,
+%             accumulator.localAdaptiveTimeSurface
 
-    % Validate inputs minimally
-    assert(isnumeric(ts_time_constant) && isscalar(ts_time_constant) && ts_time_constant > 0, ...
+    % ----------------------------------------------------------------
+    % 0. Input validation
+    % ----------------------------------------------------------------
+    assert(isnumeric(ts_time_constant) ...
+        && isscalar(ts_time_constant) ...
+        && ts_time_constant > 0, ...
         'ts_time_constant must be a positive scalar.');
 
-    % Ensure column vectors for indexing
-    x = x(:); y = y(:);
+    x = x(:);
+    y = y(:);
     if isscalar(t)
         t = repmat(t, numel(x), 1);
     else
         t = t(:);
-        assert(numel(t) == numel(x), 'Length of t must match number of coordinates.');
+        assert(numel(t) == numel(x), ...
+            'Length of t must match number of coordinates.');
     end
 
-    % Update the Global State Maps
+    % ----------------------------------------------------------------
+    % 1. Update timestamp map (reset-based)
+    % ----------------------------------------------------------------
     linear_idx = sub2ind(imgSz, x, y);
-
-    % Update timestamps (latest event overwrites previous ones)
     last_t_map(linear_idx) = t;
 
-    % Define 'now'. Usually, this is the timestamp of the very last event processed.
+    % ----------------------------------------------------------------
+    % 2. Compute exponential decay surface
+    % ----------------------------------------------------------------
     t_now = max(t);
+    decayed_surface = ...
+        exp(-(t_now - last_t_map) / ts_time_constant);
 
-    % Calculate the actual surface
-    decayed_surface = exp(-(t_now - last_t_map) / ts_time_constant);
-    
-    % Normalize the surface
-    normalized_output_frame = (decayed_surface + 1) / 2;
+    % ----------------------------------------------------------------
+    % 3. Normalize for display
+    % ----------------------------------------------------------------
+    % Surface is unsigned [0, 1] — output directly.
+    normalized_output_frame = decayed_surface;
+
 end

@@ -1,61 +1,65 @@
 function [splatted_map] = splatTimestampMap(x, y, t, imgSz, sigma)
-% SPLATTIMESTAMPMAP Efficiently spreads event timestamps spatially using 
-% Gaussian splatting (Normalized Convolution).
+% SPLATTIMESTAMPMAP  Gaussian normalized convolution of event timestamps.
 %
-% INPUTS:
-%   x, y   - Vectors of x and y coordinates (matching image dimensions)
-%   t      - Vector of timestamp values
-%   imgSz  - [SizeX, SizeY] (e.g., [640, 480])
-%   sigma  - Standard deviation of Gaussian kernel (controls "X by X" spread)
+%   SPLATTED_MAP = SPLATTIMESTAMPMAP(X, Y, T, IMGSZ, SIGMA) spreads
+%   event timestamps spatially using Gaussian-weighted normalized
+%   convolution. The result is a smooth per-pixel timestamp estimate
+%   that accounts for unobserved pixels.
 %
-% OUTPUT:
-%   splatted_map - 2D matrix with spatially spread timestamp values.
+%   Reference:
+%       Knutsson, H. and Westin, C.-F. (1993), "Normalized and
+%       Differential Convolution," Proc. IEEE CVPR, pp. 515-523.
+%
+%   Inputs:
+%     x, y   - [N x 1] Pixel coordinates (row, col).
+%     t      - [N x 1] Timestamp values [s].
+%     imgSz  - [1 x 2] Image dimensions [nRows, nCols].
+%     sigma  - Scalar Gaussian kernel standard deviation [pixels].
+%
+%   Outputs:
+%     splatted_map - [imgSz] Spatially smoothed timestamp map.
+%
+%   Algorithm:
+%     1. Scatter timestamps onto a raw map (latest event wins).
+%     2. Build a binary observation mask.
+%     3. Gaussian-blur both the raw map and the mask.
+%     4. Divide: splatted = blurred_values / blurred_weights.
+%
+%   Notes:
+%     - Regions with no nearby events are set to zero.
+%     - Coordinates: x = row, y = col, sub2ind(imgSz, x, y).
+%
+%   See also: stats.spreadEventsSpatially
 
-    % 1. VALIDATION & PRE-ALLOCATION
-    % Ensure inputs are double for precision during math, or single for speed
-    % Using single saves memory and is faster for GPU/CPU calc.
+    % ----------------------------------------------------------------
+    % 0. Initialize
+    % ----------------------------------------------------------------
     if ~isa(t, 'single'), t = single(t); end
-    
-    % Initialize grids
-    raw_map = zeros(imgSz, 'single');
+
+    raw_map  = zeros(imgSz, 'single');
     mask_map = zeros(imgSz, 'single');
-    
-    % 2. FAST MAPPING (Vectorized)
-    % Convert (x,y) to linear indices for fast assignment.
-    % Note: MATLAB uses (row, col). If your x is horizontal (1..640) and 
-    % y is vertical (1..480), and imgSz is [640, 480], ensure mapping is correct.
-    % Based on your main.m: sub2ind(imgSz, x, y) implies 
-    % dim 1 is X, dim 2 is Y.
+
+    % ----------------------------------------------------------------
+    % 1. Scatter timestamps (latest overwrites at collisions)
+    % ----------------------------------------------------------------
     linear_idx = sub2ind(imgSz, x, y);
-    
-    % Assign values. 
-    % Since 't' is sorted, the later values in the vector will overwrite 
-    % earlier ones at the same pixel. This automatically handles "collisions"
-    % by keeping the most recent timestamp (which is usually desired).
-    raw_map(linear_idx) = t;
+    raw_map(linear_idx)  = t;
     mask_map(linear_idx) = 1.0;
-    
-    % 3. GAUSSIAN SPLATTING (Normalized Convolution)
-    % We use 'Padding', 0 to ensure we don't bleed edge artifacts, 
-    % and FilterSize to limit computation to relevant neighborhood.
-    
-    % Calculate filter size based on sigma to capture ~99% of the curve
-    k_size = 2 * ceil(2 * sigma) + 1; 
-    
-    % Blur the raw values
+
+    % ----------------------------------------------------------------
+    % 2. Gaussian normalized convolution
+    % ----------------------------------------------------------------
+    k_size = 2 * ceil(2 * sigma) + 1;
+
     blurred_vals = imgaussfilt(raw_map, sigma, ...
         'FilterSize', k_size, 'Padding', 0);
-        
-    % Blur the mask (weights)
     blurred_weights = imgaussfilt(mask_map, sigma, ...
         'FilterSize', k_size, 'Padding', 0);
-    
-    % 4. NORMALIZE
-    % Divide to recover magnitude. Add eps to avoid divide-by-zero.
+
+    % ----------------------------------------------------------------
+    % 3. Normalize and clean
+    % ----------------------------------------------------------------
     splatted_map = blurred_vals ./ (blurred_weights + eps('single'));
-    
-    % Optional: Clean up areas that had virtually no events
-    % (Floating point division can leave tiny artifacts in empty space)
     splatted_map(blurred_weights < 1e-4) = 0;
 
 end

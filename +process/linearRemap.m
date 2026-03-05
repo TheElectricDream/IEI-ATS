@@ -1,25 +1,21 @@
 function x_out = linearRemap(x, tau_min, tau_max)
-%LINEARREMAP Remap values linearly between specified bounds.
-%   X_OUT = LINEARREMAP(X, TAU_MIN, TAU_MAX) remaps the input array X to
-%   the range [TAU_MIN, TAU_MAX] using a linear mapping.
+% LINEARREMAP  Linear mapping between specified bounds.
+%
+%   X_OUT = LINEARREMAP(X, TAU_MIN, TAU_MAX) remaps values in X to
+%   [TAU_MIN, TAU_MAX] using min-max linear scaling.
 %
 %   Inputs:
-%     X        - Numeric vector or array of values to remap.
-%     TAU_MIN  - Scalar specifying the lower bound of the output range.
-%     TAU_MAX  - Scalar specifying the upper bound of the output range.
+%     x       - Numeric array of values to remap.
+%     tau_min - Scalar lower bound of the output range.
+%     tau_max - Scalar upper bound of the output range.
 %
-%   Output:
-%     X_OUT    - Numeric array of same size as X with values mapped to the
-%                interval [TAU_MIN, TAU_MAX].
-%
-%   Example:
-%     y = linearRemap(randn(100,1), 0, 1);
+%   Outputs:
+%     x_out   - Numeric array mapped to [tau_min, tau_max].
 %
 %   Notes:
-%     - If X is constant, the function returns a constant array equal to
-%       the midpoint (TAU_MIN + TAU_MAX)/2 to avoid division by zero.
+%     - Returns midpoint if input is constant (avoids division by 0).
 %
-%   See also SIGMOIDREMAP.
+%   See also: process.sigmoidRemap
 
     x = double(x);
 
@@ -38,4 +34,5 @@ function x_out = linearRemap(x, tau_min, tau_max)
 
     x_norm = (x - xmin) / (xmax - xmin);
     x_out = tau_min + x_norm .* (tau_max - tau_min);
+
 end

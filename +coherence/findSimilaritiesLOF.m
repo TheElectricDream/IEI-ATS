@@ -1,64 +1,68 @@
-function [similarity_score] = findSimilaritiesLOF(x_valid, y_valid, cv_valid, imgSz)
-% findSimilarities Compute a simplified Local Outlier Factor-like score.
+function [similarity_score] = findSimilaritiesLOF(...
+    x_valid, y_valid, cv_valid, imgSz)
+% FINDSIMILARITIESLOF  Local Outlier Factor-style similarity scoring (experimental).
 %
-% similarity_score = findSimilarities(x_valid, y_valid, cv_valid, imgSz)
+%   SIMILARITY_SCORE = FINDSIMILARITIESLOF(X_VALID, Y_VALID,
+%   CV_VALID, IMGSZ) computes a simplified LOF-like score for each
+%   event by comparing its local neighbourhood density to that of
+%   its neighbours in a 3D normalized (x, y, feature) space.
 %
-% Inputs:
-%   x_valid   - vector of x coordinates (pixels)
-%   y_valid   - vector of y coordinates (pixels)
-%   cv_valid  - vector of a third feature (e.g., confidence or intensity)
-%   imgSz     - two-element vector [height, width] of the image used to
-%               normalize x and y
+%   Inputs:
+%     x_valid  - [N x 1] Row coordinates (pixels).
+%     y_valid  - [N x 1] Column coordinates (pixels).
+%     cv_valid - [N x 1] Third feature dimension (e.g., CV or IEI).
+%     imgSz    - [1 x 2] Image dimensions [nRows, nCols].
 %
-% Output:
-%   similarity_score - N-by-1 vector of scores >0. Scores near 1 indicate
-%                      points whose local neighborhood density is similar
-%                      to their neighbors. Scores >1 indicate points that
-%                      are relatively sparser (potential outliers).
+%   Outputs:
+%     similarity_score - [N x 1] Scores > 0. Values near 1 indicate
+%                        consistent local density (inlier). Values > 1
+%                        indicate relatively sparser points (outlier).
 %
-% Notes:
-% - x and y are normalized to [0,1] by dividing by imgSz. cv_valid is
-%   treated as-is and cast to single precision together with x and y.
-% - Uses a k-d tree for efficient nearest neighbor search and K=200
-%   neighbors (including the point itself) to compute mean neighbor
-%   distances. The implementation avoids divide-by-zero when duplicates
-%   are present by replacing zero mean distances with eps.
-% - The function returns a ratio of the mean neighborhood mean distance to
-%   the point's own mean distance: values >1 suggest lower local density.
+%   Algorithm:
+%     1. Normalize x, y to [0, 1] by imgSz. cv_valid used as-is.
+%     2. Build KD-tree over the 3D points.
+%     3. K=5 nearest neighbour search.
+%     4. Compute mean distance for each point (inverse density).
+%     5. Compute ratio: mean of neighbours' densities / own density.
 %
-% Example:
-%   s = findSimilarities(x, y, conf, [480, 640]);
+%   Notes:
+%     - This is an experimental alternative to findSimilarities.
+%       It is not used in the main IEI-ATS pipeline.
+%     - K=5 neighbours is hardcoded. For denser data, increase K.
+%     - Coordinates: x = row, y = col.
+%
+%   See also: coherence.findSimilarities,
+%             coherence.computeCoherenceMask
 
-% Normalize to [0,1]
-x_norm = single(x_valid ./ imgSz(1));
-y_norm = single(y_valid ./ imgSz(2));
-cv_norm = single(cv_valid);
+    % ----------------------------------------------------------------
+    % 0. Normalize and build KD-tree
+    % ----------------------------------------------------------------
+    x_norm = single(x_valid(:) ./ imgSz(1));
+    y_norm = single(y_valid(:) ./ imgSz(2));
+    cv_norm = single(cv_valid(:));
 
-% Stack the data
-points3D = [x_norm(:), y_norm(:), cv_norm(:)];
+    points3D = [x_norm, y_norm, cv_norm];
 
-% Create the tree object for the rangesearch function
-tree = createns(points3D, 'NsMethod', 'kdtree', 'Distance','euclidean', 'BucketSize', 50);
+    tree = createns(points3D, 'NsMethod', 'kdtree', ...
+        'Distance', 'euclidean', 'BucketSize', 50);
 
-% Use MATLABs rangesearch to find the nearest neighbours
-[idx, D] = knnsearch(tree, points3D, 'K', 5);
+    % ----------------------------------------------------------------
+    % 1. K=5 nearest neighbour search
+    % ----------------------------------------------------------------
+    [idx, D] = knnsearch(tree, points3D, 'K', 5);
 
-% Compute Mean Distance for every point (Inverse Density)
-% D is N x K. We take the mean across the rows (neighbors).
-mean_dist = mean(D, 2);
+    % ----------------------------------------------------------------
+    % 2. Compute simplified LOF ratio
+    % ----------------------------------------------------------------
+    % Mean distance per point (inverse density proxy)
+    mean_dist = mean(D, 2);
+    mean_dist(mean_dist == 0) = eps;
 
-% Handle divide-by-zero if duplicates exist
-mean_dist(mean_dist == 0) = eps;
+    % Mean distance of each point's neighbours
+    neighbor_mean_dists = mean_dist(idx);
+    local_context_density = mean(neighbor_mean_dists, 2);
 
-% Look up the Mean Distance of the Neighbors
-% idx is N x K. We want mean_dist(idx).
-neighbor_mean_dists = mean_dist(idx); % Now N x K matrix
-
-% Compute the Ratio (Simplified LOF)
-% "Am I as close to my neighbors as they are to theirs?"
-% If Ratio > 1, I am essentially "further out" than expected (Outlier)
-% If Ratio ~ 1, I fit in well (Similar)
-local_context_density = mean(neighbor_mean_dists, 2);
-similarity_score = local_context_density ./ mean_dist;
+    % Ratio: if > 1, the point is sparser than its neighbours
+    similarity_score = local_context_density ./ mean_dist;
 
 end

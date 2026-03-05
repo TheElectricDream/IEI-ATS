@@ -1,72 +1,102 @@
-function [S, state, normalized_output_frame] = adaptiveGlobalDecay(S, x_list, y_list, t_list, state, params)
-% ADAPTIVEGLOBALDECAY Update surface using Global Event Activity.
+function [S, state, normalized_output_frame] = ...
+    adaptiveGlobalDecay(S, x_list, y_list, t_list, state, params)
+% ADAPTIVEGLOBALDECAY  Adaptive Global Decay (AGD) time surface.
 %
-%   [S, state] = adaptiveGlobalDecay(S, x, y, t, p, state, params)
+%   [S, STATE, NORMALIZED_OUTPUT_FRAME] = ADAPTIVEGLOBALDECAY(S,
+%   X_LIST, Y_LIST, T_LIST, STATE, PARAMS) updates the surface using
+%   a globally adaptive decay rate derived from the instantaneous
+%   event rate. High event activity produces fast decay (small tau);
+%   low activity produces slow decay (long memory).
+%
+%   Reference:
+%       Nunes et al., "Adaptive Global Decay Process for Event
+%       Cameras," Proc. IEEE CVPR, pp. 9771-9780, 2023.
+%       DOI: 10.1109/CVPR52729.2023.00942
 %
 %   Inputs:
-%     S      - Current surface (H x W matrix)
-%     x,y,t  - Event vectors (spatial coords, timestamps)
-%     state  - Struct containing persistent variables (last_t, activity_state)
-%     params - Struct with tuning parameters (alpha, beta, K, etc.)
+%     S      - [imgSz] Current surface state.
+%     x_list - [N x 1] Row coordinates of events.
+%     y_list - [N x 1] Column coordinates of events.
+%     t_list - [N x 1] Timestamps [s], sorted ascending.
+%     state  - Struct with persistent fields:
+%                .activity         - Smoothed event rate (scalar)
+%                .last_update_time - Timestamp of previous batch
+%     params - Struct with tuning parameters:
+%                .alpha - EMA smoothing factor for activity
+%                .K     - Scaling constant: tau = K / activity
 %
-%   Ref: Nunes et al., "Adaptive Global Decay Process for Event Cameras", CVPR 2023
+%   Outputs:
+%     S                       - [imgSz] Updated surface.
+%     state                   - Updated state struct.
+%     normalized_output_frame - [imgSz] Display surface in [0, 1].
+%
+%   Algorithm:
+%     1. Compute global event rate for this batch.
+%     2. Smooth the rate with a leaky integrator (EMA).
+%     3. Derive dynamic tau = K / activity.
+%     4. Decay the entire surface by exp(-dt / tau).
+%     5. Reset pixels at event locations to 1.0.
+%
+%   Notes:
+%     - Reset-based: event pixels are set to 1.0 (overwrite).
+%     - tau is global — all pixels share the same decay rate.
+%     - Unsigned output in [0, 1]. Direct passthrough.
+%     - Coordinates: x = row, y = col, sub2ind(imgSz, x, y).
+%
+%   See also: accumulator.timeSurface,
+%             accumulator.localAdaptiveTimeSurface
 
+    % ----------------------------------------------------------------
+    % 0. Early exit
+    % ----------------------------------------------------------------
     if isempty(t_list)
+        normalized_output_frame = S;
         return;
     end
 
-    % 1. Determine the time delta for this batch
+    % ----------------------------------------------------------------
+    % 1. Compute batch time delta
+    % ----------------------------------------------------------------
     t_batch_end = t_list(end);
     dt_batch = t_batch_end - state.last_update_time;
 
-    % Handle duplicates and negative time
-    % If dt is zero (duplicate packet) or negative (out of order), 
-    % force it to be at least 1 microsecond (1e-6).
+    % Guard against zero or negative dt (duplicate/out-of-order)
     if dt_batch < 1e-6
-        fprintf('\ndt_batch is zero, setting to 1e-6\n')
+        fprintf('\ndt_batch is zero, setting to 1e-6\n');
     end
     dt_batch = max(dt_batch, 1e-6);
 
-    % 2. Calculate Global Activity A(t)
-    % N_events / (Total Pixels * Time) or just N_events / Time
-    % The paper often normalizes by resolution.
-    [H, W] = size(S);
-    current_rate = numel(t_list) / dt_batch; 
-    
-    % Normalize rate (optional, helps keep params K stable across resolutions)
-    % current_rate = current_rate / (H * W); 
+    % ----------------------------------------------------------------
+    % 2. Estimate global event activity (leaky integrator)
+    % ----------------------------------------------------------------
+    current_rate = numel(t_list) / dt_batch;
+    state.activity = (1 - params.alpha) * state.activity ...
+                   + params.alpha * current_rate;
 
-    % Smooth the activity (Leaky Integrator)
-    state.activity = (1 - params.alpha) * state.activity + params.alpha * current_rate;
-
-    % 3. Calculate Dynamic Tau
-    % tau is inversely proportional to activity.
-    % High activity = Small tau (fast decay)
+    % ----------------------------------------------------------------
+    % 3. Compute dynamic tau (inversely proportional to activity)
+    % ----------------------------------------------------------------
     current_tau = params.K / (state.activity + 1e-5);
 
-    % 4. Apply GLOBAL DECAY to the existing surface
-    % This is the mathematically correct step my previous code skipped.
-    % We decay the WHOLE surface by the amount of time passed in this batch,
-    % using the CURRENT tau.
+    % ----------------------------------------------------------------
+    % 4. Apply global decay to the entire surface
+    % ----------------------------------------------------------------
     decay_factor = exp(-dt_batch / current_tau);
-    
-    % Apply decay to the background (everything that happened before)
     S = S * decay_factor;
 
-    % 5. Add NEW Events
-    % For a standard Time Surface, we set the pixel to 1.0 (Reset).
-    % Since we are processing a batch, we need to handle indices carefully.
-    
-    % Linear indices of new events
+    % ----------------------------------------------------------------
+    % 5. Reset event pixels to maximum value
+    % ----------------------------------------------------------------
+    [H, W] = size(S);
     linear_idx = sub2ind([H, W], x_list, y_list);
-    
-    % Set these pixels to max value (Reset)
-    S(linear_idx) = 1.0; 
-    
-    % 6. Update State
+    S(linear_idx) = 1.0;
+
+    % ----------------------------------------------------------------
+    % 6. Update state and normalize for display
+    % ----------------------------------------------------------------
     state.last_update_time = t_batch_end;
 
-    % Normalize the surface
-    normalized_output_frame = (S + 1) / 2;
-    
+    % Surface is unsigned [0, 1] — output directly.
+    normalized_output_frame = S;
+
 end

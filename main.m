@@ -12,9 +12,6 @@ close all;
 % Datasets for MATLAB --> /home/alexandercrain/Dropbox/Graduate Documents/
 % Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5
 
-% Notes:
-% - Look into kriging interpolation
-
 %% Define processing range
 % Define start and end time to process [seconds]
 t_start_process = 0; 
@@ -23,20 +20,21 @@ t_end_process   = 1000;
 %% Import events for inspection
 
 % Set path to datasets
-hdf5_path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
+hdf5Path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
     '/Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5/'];
+videoOutPath = '/home/alexandercrain/Videos/Research/';
 
 % Set dataset name
-%file_name = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-file_name = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
-%file_name = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
-%file_name = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
+%fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
+fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+%fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
+%fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
 
 % Load the data
-tk = double(h5read([hdf5_path file_name], '/timestamp'));
-xk = single(h5read([hdf5_path file_name], '/x'));
-yk = single(h5read([hdf5_path file_name], '/y'));
-pk = single(h5read([hdf5_path file_name], '/polarity'));
+tk = double(h5read([hdf5Path fileName], '/timestamp'));
+xk = single(h5read([hdf5Path fileName], '/x'));
+yk = single(h5read([hdf5Path fileName], '/y'));
+pk = single(h5read([hdf5Path fileName], '/polarity'));
 
 % Convert time to seconds
 tk = (tk - tk(1))/1e6;
@@ -105,6 +103,7 @@ alts_params.filter_size          = 11;
 alts_params.filter_sigma         = 9.0;
 alts_params.surface_tau_release  = 3.0;
 alts_params.div_norm_exp         = 1.0;
+alts_params.symmetric_tone_scale = 3.0;
 alts_activity_score.mean         = zeros(frame_total, 1);
 alts_activity_score.median       = zeros(frame_total, 1);
 alts_activity_score.std          = zeros(frame_total, 1);
@@ -149,6 +148,24 @@ agd_params.alpha   = 0.001;   % Smoothing factor for activity
 agd_params.K       = 5000000.0;  % Scaling factor (Controls "memory length")
 agd_activity_store = zeros(length(frame_total),1);
 
+% MOTION-ENCODED TIME-SURFACE (METS) PARAMETERS
+% ----------------------------------------------
+% REF: Xu et al., "METS: Motion-Encoded Time-Surface for Event-Based
+%      High-Speed Pose Tracking," IJCV, vol. 133, pp. 4401-4419, 2025.
+%      DOI: 10.1007/s11263-025-02379-6
+% ----------------------------------------------
+% State: polarity-separated timestamp maps (Eq. 4)
+mets_state.t_last_pos = zeros(imgSz);   % Last event timestamp, positive polarity
+mets_state.t_last_neg = zeros(imgSz);   % Last event timestamp, negative polarity
+mets_state.t_last_any = zeros(imgSz);   % Last event timestamp, either polarity
+mets_state.p_last     = zeros(imgSz);   % Polarity of last event at each pixel
+
+% Parameters (Section 3.3 of the paper — identical to their defaults)
+mets_params.R    = 4;    % Observation window half-size [pixels]
+mets_params.n    = 3;    % Velocity estimation range [pixels]
+mets_params.d    = 5;    % Decay step [pixels]
+mets_params.d_th = 8;    % Decay distance threshold [pixels]
+
 %% Initialize all figure code for video output
 % Indicate which videos should be saved
 cohOut = false;
@@ -156,7 +173,7 @@ atsOut = true;
 
 % Initialize the videos
 [hFigs, hAxs, hImgs, videoWriters] = plot.initializeEventVideos(cohOut,...
-    atsOut, imgSz);
+    atsOut, imgSz, videoOutPath);
 
 %% Initialize data storage and perform data optimizations
 % Identify number of events
@@ -183,6 +200,12 @@ for frameIndex = 1:frame_total
     % Slice the events to a valid range
     [current_idx, x_valid, y_valid, t_valid, p_valid] = ...
     process.sliceToValidRange(t_range_n, xk, yk, tk, pk, imgSz, current_idx);
+
+    % Store the valid event data in the output structure
+    output_struct.x_valid{frameIndex} = x_valid;
+    output_struct.y_valid{frameIndex} = y_valid;
+    output_struct.t_valid{frameIndex} = t_valid;
+    output_struct.p_valid{frameIndex} = p_valid;
 
     % Confirm the presence of valid events in the packet
     % If no events are present, we skip this frame
@@ -301,11 +324,6 @@ for frameIndex = 1:frame_total
     % Set any retention variables
     time_surface_map_prev = time_surface_map_raw;
 
-    % Store the adaptive map score
-    alts_activity_score.mean(frameIndex) = mean(adaptive_gains(abs(adaptive_gains)>0));
-    alts_activity_score.median(frameIndex) = median(adaptive_gains(abs(adaptive_gains)>0));
-    alts_activity_score.std(frameIndex) = std(adaptive_gains(abs(adaptive_gains)>0));
-
     % ----------------- NUNES GLOBAL ADAPTIVE ACCUMULATION----------------%
     % --------------------------------------------------------------------%
     
@@ -334,11 +352,28 @@ for frameIndex = 1:frame_total
     %     accumulator.speedInvariantTimeSurface(sits_t_map, sorted_x,...
     %     sorted_y, sits_R);
 
-    % ------------------------ EXPORTING VIDEO ---------------------------%
+    % ------------ MOTION-ENCODED TIME-SURFACE (METS) ----------------%
+    % --------------------------------------------------------------------%
+
+    % % Run Motion Encoded Time Surface algorithm
+    % [mets_surface, mets_state, normalized_output_frame] = ...
+    %     accumulator.motionEncodedTimeSurface(...
+    %     sorted_x, sorted_y, sorted_t, p_signed, ...
+    %     imgSz, mets_state, mets_params);
+
+    % -------------------------- DATA EXPORT -----------------------------%
     % --------------------------------------------------------------------%
     
     % Store the processed frames for later use
     alts_frame_storage{frameIndex} = normalized_output_frame;
+
+    % Store the adaptive map score
+    alts_activity_score.mean(frameIndex) = mean(adaptive_gains(abs(adaptive_gains)>0));
+    alts_activity_score.median(frameIndex) = median(adaptive_gains(abs(adaptive_gains)>0));
+    alts_activity_score.std(frameIndex) = std(adaptive_gains(abs(adaptive_gains)>0));
+
+    % ------------------------ EXPORTING VIDEO ---------------------------%
+    % --------------------------------------------------------------------%
 
     % Convert to uint8 (0-255 range)
     grayscale_normalized_output_frame = ...
@@ -363,11 +398,16 @@ for frameIndex = 1:frame_total
         clim([0 255]);
         writeVideo(videoWriters{1}, grayscale_normalized_output_frame'); %getframe(hFigs{1}));
         
-        frameOutputFolder = '/home/alexandercrain/Videos/output_frames';
+        frameOutputFolder =  string(videoOutPath) + "output_frames";
         % Also write each frame as a PNG to a folder
         % Ensure output folder exists
-        if ~exist(frameOutputFolder, 'dir')
-            mkdir(frameOutputFolder);
+        if frameIndex == 1
+            if ~exist(frameOutputFolder, 'dir')
+                mkdir(frameOutputFolder);
+            else 
+                rmdir(frameOutputFolder, 's');
+                mkdir(frameOutputFolder); % Create the output folder
+            end
         end
         % Build filename with zero-padded frame index
         fname = fullfile(frameOutputFolder, sprintf('frame_%05d.png', frameIndex));
