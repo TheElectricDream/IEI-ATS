@@ -16,8 +16,8 @@ close all;
 % Set 'None' for filter selection to skip filtering entirely
 
 % Set filtering
-% Options: 'NONE', 'COHERENCE'
-filterSelection = 'COHERENCE';
+% Options: 'NONE', 'STC', 'BAF', 'COHERENCE'
+filterSelection = 'BAF';
 
 % Set accumulator
 % Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
@@ -107,8 +107,49 @@ coh_params.similarity_threshold        = 0.5;
 % Initialize mask for filter
 filter_mask                 = ones(imgSz);
 
-% Boolean controls
-filter_by_coherence         = true;
+% BACKGROUND ACTIVITY FILTER PARAMETERS (Delbruck 2008)
+% ---------------------------------------------------------------
+% T: Support time window [s]. An event passes if any of its 8
+%    neighbours fired within the last T seconds. This is the sole
+%    tunable parameter.
+%
+%    - Shorter T → aggressive filtering, only tight spatiotemporal
+%      clusters survive (fast edges with high event density)
+%    - Longer T  → permissive, retains slower/sparser activity
+
+baf_params.T                = 10e-3;    % [s] support time window
+
+% Initialize the persistent last-event timestamp map at full
+% pixel resolution. -Inf ensures no false passes on startup.
+baf_lastTimesMap            = -Inf(imgSz);
+
+% Optional: pre-allocate storage for BAF metrics
+baf_n_passed_store          = zeros(1, frame_total);
+baf_n_total_store           = zeros(1, frame_total);
+
+% SPATIOTEMPORAL CORRELATION FILTER PARAMETERS (Liu et al. 2015)
+% ---------------------------------------------------------------
+% dT: Correlation time window [s]. An event passes if the time
+%     since the last event at its subsampled cell is less than dT.
+%     Equivalent to C*(Vrs-Vth)/I1 in the hardware (Eq. in paper).
+%     - Shorter dT → more aggressive filtering, only fast activity
+%       passes (good for high-speed edges, rejects slow drift)
+%     - Longer dT  → more permissive, retains slower activity
+stc_params.dT               = 10e-3;    % [s] correlation window
+stc_params.subsample_rate   = 1;        % 2×2 spatial subsampling
+
+% Initialize the persistent last-event timestamp map at cell
+% resolution. -Inf ensures the first event at every cell always
+% fails the ISI check (matching the hardware's Fig. 5 behaviour
+% where e1 is always rejected).
+stc_block_size = 2^stc_params.subsample_rate;
+stc_cellSz     = ceil(imgSz ./ stc_block_size);
+stc_lastTimesMap = -Inf(stc_cellSz);
+
+% Optional: pre-allocate storage for STC metrics (event counts
+% per frame, for comparison against coherence filtering)
+stc_n_passed_store = zeros(1, frame_total);
+stc_n_total_store  = zeros(1, frame_total);
 
 % ADAPTIVE LOCAL TIME-SURFACE PARAMETERS
 % --------------------------------------
@@ -336,14 +377,56 @@ for frameIndex = 1:frame_total
         fprintf(['FILTER SELECTION: ' filterSelection '\n']);
     end
 
-    % --------------------------- COHERENCE ------------------------------%
-    % --------------------------------------------------------------------%
+    if strcmp(filterSelection, 'STC') == 1
 
-    % Choose whether or not to generate a filter
-    if strcmp(filterSelection, 'COHERENCE') == 1
+        % -------------------- STC CORRELATION FILTER --------------------%
+        % ----------------------------------------------------------------%
+
+        % Liu et al. (2015) spatiotemporal correlation filter.
+        % Processes events in temporal order within the frame, checking
+        % each event's ISI against the programmable dT window. Events
+        % with ISI < dT at their subsampled cell are passed; others
+        % are rejected as uncorrelated background activity.
+        %
+        % The lastTimesMap persists across frames, providing temporal
+        % continuity: the first event in a new frame can still be
+        % correlated with the last event of the previous frame at
+        % the same cell.
+
+        [filter_mask, stc_lastTimesMap, stc_n_pass, stc_n_tot] = ...
+            filters.spatiotemporalCorrelation(sorted_x, sorted_y, ...
+            sorted_t, imgSz, stc_lastTimesMap, stc_params);
+
+        % Store metrics for post-processing analysis
+        stc_n_passed_store(frameIndex) = stc_n_pass;
+        stc_n_total_store(frameIndex)  = stc_n_tot;
+
+    elseif strcmp(filterSelection, 'BAF') == 1
+
+        % ------------- BACKGROUND ACTIVITY FILTER (BAF) -----------------%
+        % ----------------------------------------------------------------%
+        % Delbruck (2008) neighbour-support BA filter.
+        % For each event: (1) check if any 8-connected neighbour
+        % fired within the last T seconds by reading the timestamp
+        % at the current pixel (which was written by a neighbour),
+        % (2) write the current timestamp to all 8 neighbour
+        % locations for future events to check against.
+
+        [filter_mask, baf_lastTimesMap, baf_n_pass, baf_n_tot] = ...
+            filters.backgroundActivityFilter(sorted_x, sorted_y, ...
+            sorted_t, imgSz, baf_lastTimesMap, baf_params);
+
+        % Store metrics for post-processing analysis
+        baf_n_passed_store(frameIndex) = baf_n_pass;
+        baf_n_total_store(frameIndex)  = baf_n_tot;
+
+    elseif strcmp(filterSelection, 'COHERENCE') == 1
+
+        % --------------------- COHERENCE FILTER -------------------------%
+        % ----------------------------------------------------------------%
 
         [norm_trace_map, norm_similarity_map, norm_persist_map,...
-            filtered_coherence_map] = coherence.computeCoherenceMask(sorted_x,...
+            filtered_coherence_map] = filters.computeCoherenceMask(sorted_x,...
             sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
             group_ends, coh_params, frameIndex, norm_trace_map_prev, t_mean_diff);
     
