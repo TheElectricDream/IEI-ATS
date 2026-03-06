@@ -12,6 +12,17 @@ close all;
 % Datasets for MATLAB --> /home/alexandercrain/Dropbox/Graduate Documents/
 % Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5
 
+%% Select algorithms for filtering and accumulation
+% Set 'None' for filter selection to skip filtering entirely
+
+% Set filtering
+% Options: 'NONE', 'COHERENCE'
+filterSelection = 'COHERENCE';
+
+% Set accumulator
+% Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
+accumulatorSelection = 'IEI-ATS';
+
 %% Define processing range
 % Define start and end time to process [seconds]
 t_start_process = 0; 
@@ -22,13 +33,17 @@ t_end_process   = 1000;
 % Set path to datasets
 hdf5Path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
     '/Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5/'];
-videoOutPath = '/home/alexandercrain/Videos/Research/';
 
 % Set dataset name
 %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
 fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
 %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
 %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
+
+% Set output video name
+videoOutPath = fullfile('/home/alexandercrain/Videos/Research', ...
+    sprintf('Normalized-Output-Fltr-%s-Acmtr-%s-%s.avi', ...
+    filterSelection, accumulatorSelection, datestr(now,'yyyymmdd-HHMMSS'))); %#ok<TNOW1,DATST>
 
 % Load the data
 tk = double(h5read([hdf5Path fileName], '/timestamp'));
@@ -166,6 +181,24 @@ mets_params.n    = 3;    % Velocity estimation range [pixels]
 mets_params.d    = 5;    % Decay step [pixels]
 mets_params.d_th = 8;    % Decay distance threshold [pixels]
 
+% ZHU ADAPTIVE TIME SURFACE (ATS) PARAMETERS
+% -------------------------------------------
+% REF: Zhu, S. et al., "Event Camera-based Visual Odometry for
+%      Dynamic Motion Tracking of a Legged Robot Using Adaptive
+%      Time Surface," IEEE/RSJ IROS, 2023, pp. 3475-3482.
+%      DOI: 10.1109/IROS55552.2023.10342048
+% -------------------------------------------
+% State: single timestamp map (no polarity separation)
+zhu_state.t_last = zeros(imgSz);
+
+% Parameters (paper does not specify exact values; these are
+% reasonable defaults for the EVOS dataset frame intervals)
+zhu_params.tau_u       = 0.5;    % Upper bound on decay [s]
+zhu_params.tau_l       = 0.01;   % Lower bound on decay [s]
+zhu_params.n_neighbors = 8;      % # of most-recent neighbors (paper uses n)
+zhu_params.blur_sigma  = 1.0;    % Gaussian blur sigma [pixels]
+zhu_params.median_sz   = 3;      % Median filter kernel size [pixels, odd]
+
 %% Initialize all figure code for video output
 % Indicate which videos should be saved
 cohOut = false;
@@ -188,7 +221,18 @@ time_surface_map_prev   = zeros(imgSz);
 
 %% Data processing starting point
 % Loop through the figures to capture each frame
-for frameIndex = 1:frame_total  
+for frameIndex = 1:frame_total 
+
+    if frameIndex == 1
+        fprintf('\n')
+        fprintf('------------------ OPTIONS -----------------\n')
+        fprintf('--------------------------------------------\n')
+        fprintf('\n')
+    end
+
+    % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
+    % ============================= SETUP ================================%
+    % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
 
     % Start loop timer
     tic;
@@ -216,8 +260,8 @@ for frameIndex = 1:frame_total
         
     end   
 
-    % ---------------------- EVENT PREPERATION------------------------%
-    % ----------------------------------------------------------------%
+    % ------------------------ EVENT PREPERATION--------------------------%
+    % --------------------------------------------------------------------%
     
     % Convert 2D subscripts (x,y) to 1D linear indices
     % Imagine you are a post-man with a disorganized stack of letters. 
@@ -284,11 +328,19 @@ for frameIndex = 1:frame_total
     iei_map(new_obs_mask) = (1 - iei_alpha) .* iei_map(new_obs_mask) +...
         iei_alpha .* t_mean_diff(new_obs_mask);
 
-    % ---------------------- EVENT COHERENCE -----------------------------%
+    % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
+    % =========================== FILTERING ==============================%
+    % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
+
+    if frameIndex == 1
+        fprintf(['FILTER SELECTION: ' filterSelection '\n']);
+    end
+
+    % --------------------------- COHERENCE ------------------------------%
     % --------------------------------------------------------------------%
 
     % Choose whether or not to generate a filter
-    if filter_by_coherence == true
+    if strcmp(filterSelection, 'COHERENCE') == 1
 
         [norm_trace_map, norm_similarity_map, norm_persist_map,...
             filtered_coherence_map] = coherence.computeCoherenceMask(sorted_x,...
@@ -303,74 +355,114 @@ for frameIndex = 1:frame_total
         filter_mask(isnan(filter_mask)) = 0;
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
         filter_mask(filter_mask<coh_params.coherence_threshold) = 0;
-    else
+
+    elseif strcmp(filterSelection, 'NONE') == 1
 
         % Use a unity mask instead
         filter_mask = ones(imgSz);
 
     end
 
-    % -------------- ADAPTIVE LOCAL TIME-SURFACE UPDATE ------------------%
-    % --------------------------------------------------------------------%
+    % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
+    % ========================= ACCUMULATION =============================%
+    % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
+
+    if frameIndex == 1
+        fprintf(['ACCUMULATOR SELECTION: ' accumulatorSelection '\n']);
+    end
+
+    if strcmp(accumulatorSelection, 'IEI-ATS') == 1
+
+        % ------------ ADAPTIVE LOCAL TIME-SURFACE UPDATE ----------------%
+        % ----------------------------------------------------------------%
+
+        % Accumulate polarity into a 2D grid
+        % If multiple events land on one pixel, we sum their polarities 
+        polarity_map = accumarray([sorted_x, sorted_y], p_signed, imgSz, @sum, 0);
     
-    % Accumulate polarity into a 2D grid
-    % If multiple events land on one pixel, we sum their polarities (e.g., +1 +1 -1 = +1)
-    polarity_map = accumarray([sorted_x, sorted_y], p_signed, imgSz, @sum, 0);
-
-    [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
-    accumulator.localAdaptiveTimeSurface(iei_map,...
-    time_surface_map_prev, alts_params, filter_mask, polarity_map, counts);
-
-    % Set any retention variables
-    time_surface_map_prev = time_surface_map_raw;
-
-    % ----------------- NUNES GLOBAL ADAPTIVE ACCUMULATION----------------%
-    % --------------------------------------------------------------------%
+        [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
+        accumulator.localAdaptiveTimeSurface(iei_map,...
+        time_surface_map_prev, alts_params, filter_mask, polarity_map, counts);
     
-    % % Run the AGD algorithm
-    % [agd_surface, agd_state, ~] = accumulator.adaptiveGlobalDecay(agd_surface,...
-    %     sorted_x, sorted_y, sorted_t, agd_state, agd_params);
-    % 
-    % % Store the surface into the standard normalized frame
-    % normalized_output_frame = agd_surface;
-    % 
-    % % Store activity data for later inspection
-    % agd_activity_store(frameIndex) = agd_state.activity;
+        % Set any retention variables
+        time_surface_map_prev = time_surface_map_raw;
 
-    % --------------------- TIME-SURFACE ACCUMULATION --------------------%
-    % --------------------------------------------------------------------%
+        % Store the processed frames for later use
+        alts_frame_storage{frameIndex} = normalized_output_frame;
+
+        % Store the adaptive map score
+        alts_activity_score.mean(frameIndex) = mean(adaptive_gains...
+            (abs(adaptive_gains)>0));
+        alts_activity_score.median(frameIndex) = median(adaptive_gains...
+            (abs(adaptive_gains)>0));
+        alts_activity_score.std(frameIndex) = std(adaptive_gains...
+            (abs(adaptive_gains)>0));
+
     
-    % % Run the normal time-surface accumulation algorithm
-    % [ts_t_map, normalized_output_frame] = accumulator.timeSurface(ts_t_map,...
-    %  sorted_x, sorted_y, sorted_t, imgSz, ts_time_constant);
+    elseif strcmp(accumulatorSelection, 'AGD') == 1
 
-    % ---------- SPEED INVARIENT TIME-SURFACE ACCUMULATION ---------------%
-    % --------------------------------------------------------------------%
+        % --------------- NUNES GLOBAL ADAPTIVE ACCUMULATION--------------%
+        % ----------------------------------------------------------------%
     
-    % % Run the speed invarient time-surface accumulation algorithm
-    % [sits_t_map, normalized_output_frame] = ...
-    %     accumulator.speedInvariantTimeSurface(sits_t_map, sorted_x,...
-    %     sorted_y, sits_R);
-
-    % ------------ MOTION-ENCODED TIME-SURFACE (METS) ----------------%
-    % --------------------------------------------------------------------%
-
-    % % Run Motion Encoded Time Surface algorithm
-    % [mets_surface, mets_state, normalized_output_frame] = ...
-    %     accumulator.motionEncodedTimeSurface(...
-    %     sorted_x, sorted_y, sorted_t, p_signed, ...
-    %     imgSz, mets_state, mets_params);
-
-    % -------------------------- DATA EXPORT -----------------------------%
-    % --------------------------------------------------------------------%
+        % Run the AGD algorithm
+        [agd_surface, agd_state, ~] = accumulator.adaptiveGlobalDecay(agd_surface,...
+            sorted_x, sorted_y, sorted_t, agd_state, agd_params);
     
-    % Store the processed frames for later use
-    alts_frame_storage{frameIndex} = normalized_output_frame;
+        % Store the surface into the standard normalized frame
+        normalized_output_frame = agd_surface;
+    
+        % Store activity data for later inspection
+        agd_activity_store(frameIndex) = agd_state.activity;
 
-    % Store the adaptive map score
-    alts_activity_score.mean(frameIndex) = mean(adaptive_gains(abs(adaptive_gains)>0));
-    alts_activity_score.median(frameIndex) = median(adaptive_gains(abs(adaptive_gains)>0));
-    alts_activity_score.std(frameIndex) = std(adaptive_gains(abs(adaptive_gains)>0));
+    elseif strcmp(accumulatorSelection, 'HOTS') == 1        
+    
+        % ------------------- TIME-SURFACE ACCUMULATION ------------------%
+        % ----------------------------------------------------------------%
+        
+        % Run the normal time-surface accumulation algorithm
+        [ts_t_map, normalized_output_frame] = accumulator.timeSurface(ts_t_map,...
+         sorted_x, sorted_y, sorted_t, imgSz, ts_time_constant);
+
+    elseif strcmp(accumulatorSelection, 'SITS') == 1
+
+        % -------- SPEED INVARIENT TIME-SURFACE ACCUMULATION -------------%
+        % ----------------------------------------------------------------%
+        
+        % % Run the speed invarient time-surface accumulation algorithm
+        % [sits_t_map, normalized_output_frame] = ...
+        %     accumulator.speedInvariantTimeSurface(sits_t_map, sorted_x,...
+        %     sorted_y, sits_R);
+
+    elseif strcmp(accumulatorSelection, 'METS') == 1
+
+        % ------------ MOTION-ENCODED TIME-SURFACE (METS) ----------------%
+        % ----------------------------------------------------------------%
+    
+        % % Run Motion Encoded Time Surface algorithm
+        % [mets_surface, mets_state, normalized_output_frame] = ...
+        %     accumulator.motionEncodedTimeSurface(...
+        %     sorted_x, sorted_y, sorted_t, p_signed, ...
+        %     imgSz, mets_state, mets_params);
+
+    elseif strcmp(accumulatorSelection, 'EVO-ATS') == 1
+
+        % ------------ ZHU ADAPTIVE TIME SURFACE (ATS) -------------------%
+        % ----------------------------------------------------------------%
+    
+        [zhu_surface, zhu_state, normalized_output_frame, zhu_tau_map] = ...
+            accumulator.adaptiveTimeSurfaceZhu(...
+            sorted_x, sorted_y, sorted_t, p_signed, ...
+            imgSz, zhu_state, zhu_params);
+
+    else
+
+        error('An invalid accumulator has been selected!')
+
+    end
+
+    if frameIndex == 1
+        fprintf('\n--------------------------------------------\n\n');
+    end
 
     % ------------------------ EXPORTING VIDEO ---------------------------%
     % --------------------------------------------------------------------%
@@ -396,9 +488,9 @@ for frameIndex = 1:frame_total
         set(hAxs{1}, 'Visible','off');
         colormap(gray);
         clim([0 255]);
-        writeVideo(videoWriters{1}, grayscale_normalized_output_frame'); %getframe(hFigs{1}));
+        writeVideo(videoWriters{1}, grayscale_normalized_output_frame'); 
         
-        frameOutputFolder =  string(videoOutPath) + "output_frames";
+        frameOutputFolder =  string(videoOutPath(1:end-4)) + "-FRAMES";
         % Also write each frame as a PNG to a folder
         % Ensure output folder exists
         if frameIndex == 1
