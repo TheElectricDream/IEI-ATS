@@ -16,8 +16,8 @@ close all;
 % Set 'None' for filter selection to skip filtering entirely
 
 % Set filtering
-% Options: 'NONE', 'STC', 'BAF', 'COHERENCE'
-filterSelection = 'BAF';
+% Options: 'NONE', 'STC', 'BAF', 'EDF', 'STCC', 'COHERENCE'
+filterSelection = 'STCC';
 
 % Set accumulator
 % Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
@@ -117,7 +117,7 @@ filter_mask                 = ones(imgSz);
 %      clusters survive (fast edges with high event density)
 %    - Longer T  → permissive, retains slower/sparser activity
 
-baf_params.T                = 10e-3;    % [s] support time window
+baf_params.T                = 10e-1;    % [s] support time window
 
 % Initialize the persistent last-event timestamp map at full
 % pixel resolution. -Inf ensures no false passes on startup.
@@ -135,7 +135,7 @@ baf_n_total_store           = zeros(1, frame_total);
 %     - Shorter dT → more aggressive filtering, only fast activity
 %       passes (good for high-speed edges, rejects slow drift)
 %     - Longer dT  → more permissive, retains slower activity
-stc_params.dT               = 10e-3;    % [s] correlation window
+stc_params.dT               = 10e-1;    % [s] correlation window
 stc_params.subsample_rate   = 1;        % 2×2 spatial subsampling
 
 % Initialize the persistent last-event timestamp map at cell
@@ -150,6 +150,93 @@ stc_lastTimesMap = -Inf(stc_cellSz);
 % per frame, for comparison against coherence filtering)
 stc_n_passed_store = zeros(1, frame_total);
 stc_n_total_store  = zeros(1, frame_total);
+
+% EVENT DENSITY FILTER PARAMETERS (Feng et al. 2020)
+% ---------------------------------------------------------------
+% L:   Spatial neighbourhood side length (odd integer). The density
+%      matrix D is L x L centred on the event pixel. Larger L gives
+%      more spatial context but may blur the decision boundary at
+%      object edges. The paper uses L = 5.
+%
+% dt:  Temporal neighbourhood [s]. Only events within [t - dt, t]
+%      contribute to the density count. Must be tuned to match the
+%      sensor's BA rate and the target's event generation rate.
+%      The paper uses dt = 5 ms for a CeleX-IV at 768x640.
+%      For the DVXplorer Micro (EVOS dataset), you may need a
+%      larger dt (10-50 ms) due to lower event rates from the
+%      slowly rotating spacecraft target.
+%
+% Psi: Density threshold. An event passes coarse filtering only if
+%      the total event count in its L x L x dt neighbourhood >= Psi.
+%      The paper uses Psi = 3. Lower values are more permissive;
+%      higher values reject more aggressively.
+%
+% Two-stage operation:
+%   Stage 1 (Coarse): Event density d = ||D||_1 >= Psi?
+%   Stage 2 (Fine):   Hot pixel check — are there other passed
+%                     events in the 3x3 neighbourhood?
+
+edf_params.L                = 5;        % Spatial neighbourhood size
+edf_params.dt               = 10e-1;    % [s] temporal window
+edf_params.Psi              = 3;        % Density threshold
+
+% Initialize the cross-frame event buffer (empty)
+edf_eventBuffer.x           = [];
+edf_eventBuffer.y           = [];
+edf_eventBuffer.t           = [];
+
+% Optional: pre-allocate storage for EDF metrics
+edf_n_passed_store          = zeros(1, frame_total);
+edf_n_total_store           = zeros(1, frame_total);
+
+% STCC-FILTER PARAMETERS (Li et al. 2024)
+% ---------------------------------------------------------------
+% N:       Number of neighbouring events in the context window for
+%          POS and W(p) computation. The paper uses N = 1000.
+%          For the EVOS dataset with ~4000 events/frame at
+%          t_interval = 0.33 s, N = 500 is a reasonable starting
+%          point to balance accuracy and speed.
+%
+% sigma_d: Std dev of the spatial distance Gaussian [pixels].
+%          Controls how sharply spatial proximity is weighted.
+%          Paper default: 8 pixels.
+%
+% sigma_t: Std dev of the temporal distance Gaussian [seconds].
+%          Controls how sharply temporal proximity is weighted.
+%          Paper default: 5e-3 (5 ms). For the slower EVOS
+%          dynamics, you may need 10–30 ms.
+%
+% sigma_p: Std dev of the polarity distance Gaussian.
+%          Paper default: 1. Since |Δp|² ∈ {0, 1} (for 0/1
+%          polarity) or {0, 4} (for ±1 polarity), this controls
+%          the ratio of weight given to polarity-matched vs
+%          mismatched neighbours.
+%
+% TH:      Base discrimination threshold for POS.
+%          Events pass if POS > TH / W(p).
+%          This is the primary tuning knob. Lower TH → more
+%          permissive (more events pass). Higher TH → more
+%          aggressive filtering. Start with 0.05–0.2 and adjust
+%          based on visual inspection of the output.
+%
+% COMPUTATIONAL NOTE:
+%   The STCC-Filter is O(M × N) per frame. With M = 4000 events
+%   and N = 500, that's 2M Gaussian evaluations per frame.
+%   This is slower than BAF/STC (O(M)) but comparable to the
+%   coherence filter's KD-tree operations. If speed is critical,
+%   reduce N.
+
+stcc_params.N               = 500;      % Context window size
+stcc_params.sigma_d         = 8;        % [pixels]
+stcc_params.sigma_t         = 10e-3;    % [s] (wider than paper for EVOS)
+stcc_params.sigma_p         = 1;        % Polarity Gaussian std dev
+stcc_params.TH              = 0.1;      % Base threshold (tune)
+
+% No persistent state needed (stateless filter)
+
+% Optional: pre-allocate storage for STCC metrics
+stcc_n_passed_store         = zeros(1, frame_total);
+stcc_n_total_store          = zeros(1, frame_total);
 
 % ADAPTIVE LOCAL TIME-SURFACE PARAMETERS
 % --------------------------------------
@@ -419,6 +506,52 @@ for frameIndex = 1:frame_total
         % Store metrics for post-processing analysis
         baf_n_passed_store(frameIndex) = baf_n_pass;
         baf_n_total_store(frameIndex)  = baf_n_tot;
+
+    elseif strcmp(filterSelection, 'EDF') == 1
+
+        % ------------ EVENT DENSITY FILTER (EDF) ------------------------%
+        % ----------------------------------------------------------------%
+        % Feng et al. (2020) two-stage event density denoising.
+        %
+        % Stage 1: Count events in the L x L spatial x dt temporal
+        % neighbourhood for each event. Reject if count < Psi.
+        %
+        % Stage 2: From Stage 1 survivors, reject hot pixels by
+        % checking for the presence of other survivors in the 3x3
+        % neighbourhood (masking out the centre pixel).
+
+        [filter_mask, edf_eventBuffer, edf_n_pass, edf_n_tot] = ...
+            filters.eventDensityFilter(sorted_x, sorted_y, ...
+            sorted_t, imgSz, edf_eventBuffer, edf_params);
+
+        % Store metrics for post-processing analysis
+        edf_n_passed_store(frameIndex) = edf_n_pass;
+        edf_n_total_store(frameIndex)  = edf_n_tot;
+
+    elseif strcmp(filterSelection, 'STCC') == 1
+
+        % ------- STCC-FILTER (Space-Time-Content Correlation) -----------%
+        % ----------------------------------------------------------------%
+        % Li et al. (2024) Gaussian-weighted POS with polarity-based
+        % content correlation self-adjusting threshold.
+        %
+        % For each event:
+        %   1. Compute POS = Σ G(Δd, Δt) over N neighbours (Eq. 10)
+        %   2. Compute W(p) = Σ G(Δp) over N neighbours (Eq. 16)
+        %   3. Self-adjust threshold: TH' = TH / W(p) (Eq. 17)
+        %   4. Pass if POS > TH' (Eq. 18)
+
+        % Compute signed polarity for this filter
+        p_signed_for_stcc = sorted_p * 2 - 1;
+
+        [filter_mask, stcc_n_pass, stcc_n_tot] = ...
+            filters.stccFilter(sorted_x, sorted_y, ...
+            sorted_t, p_signed_for_stcc, imgSz, stcc_params);
+
+        % Store metrics for post-processing analysis
+        stcc_n_passed_store(frameIndex) = stcc_n_pass;
+        stcc_n_total_store(frameIndex)  = stcc_n_tot;
+        
 
     elseif strcmp(filterSelection, 'COHERENCE') == 1
 
