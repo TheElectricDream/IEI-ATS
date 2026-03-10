@@ -2,8 +2,8 @@ function fig = plotElbowDiagnostics(auto_threshold, diagnostics, varargin)
 % PLOTELBOWDIAGNOSTICS  Two-panel diagnostic figure for elbow threshold.
 %
 %   FIG = PLOTELBOWDIAGNOSTICS(AUTO_THRESHOLD, DIAGNOSTICS) produces a
-%   two-panel figure showing (left) the raw mean NN distance vs.
-%   threshold curve with the selected elbow marked, and (right) the
+%   two-panel figure showing (left) the raw mean local binary variance
+%   vs. threshold curve with the selected elbow marked, and (right) the
 %   normalized curve with the chord and perpendicular distance peak.
 %
 %   FIG = PLOTELBOWDIAGNOSTICS(..., 'Name', Value) accepts optional
@@ -14,13 +14,13 @@ function fig = plotElbowDiagnostics(auto_threshold, diagnostics, varargin)
 %   Inputs:
 %     auto_threshold - Scalar elbow threshold from findElbowThreshold.
 %     diagnostics    - Struct returned by findElbowThreshold (second
-%                      output). Must contain fields: th_vec, mean_nn,
-%                      th_norm, nn_norm, perp_dist, elbow_idx.
+%                      output). Must contain fields: th_vec, mean_lbv,
+%                      th_norm, lbv_norm, perp_dist, elbow_idx.
 %
 %   Outputs:
 %     fig - Figure handle.
 %
-%   See also: process.findElbowThreshold
+%   See also: stats.findElbowThreshold
 
     % Parse optional arguments
     p = inputParser;
@@ -31,12 +31,12 @@ function fig = plotElbowDiagnostics(auto_threshold, diagnostics, varargin)
     label_prefix = p.Results.Title;
     fig_pos      = p.Results.FigPosition;
 
-    % Unpack
-    th_g = diagnostics.th_vec;
-    nn_g = diagnostics.mean_nn;
-    th_n = diagnostics.th_norm;
-    nn_n = diagnostics.nn_norm;
-    ei   = diagnostics.elbow_idx;
+    % Unpack diagnostics
+    th_g  = diagnostics.th_vec;
+    lbv_g = diagnostics.mean_lbv;
+    th_n  = diagnostics.th_norm;
+    lbv_n = diagnostics.lbv_norm;
+    ei    = diagnostics.elbow_idx;
 
     if ~isempty(label_prefix)
         label_prefix = [label_prefix ' — '];
@@ -46,37 +46,37 @@ function fig = plotElbowDiagnostics(auto_threshold, diagnostics, varargin)
 
     % --- Left panel: raw curve ---
     subplot(1, 2, 1);
-    plot(th_g, nn_g, 'b-o', 'MarkerSize', 3, 'LineWidth', 1.2);
+    plot(th_g, lbv_g, 'b-o', 'MarkerSize', 3, 'LineWidth', 1.2);
     hold on;
     xline(auto_threshold, 'r--', 'LineWidth', 1.5);
-    plot(auto_threshold, nn_g(ei), 'rp', ...
+    plot(auto_threshold, lbv_g(ei), 'rp', ...
         'MarkerSize', 14, 'MarkerFaceColor', 'r');
     xlabel('Threshold');
-    ylabel('Mean NN distance [px]');
+    ylabel('Mean local binary variance');
     title(sprintf('%sRaw curve — elbow @ %.4f', label_prefix, ...
         auto_threshold));
     grid on;
 
     % --- Right panel: normalized + chord ---
     subplot(1, 2, 2);
-    plot(th_n, nn_n, 'b-o', 'MarkerSize', 3, 'LineWidth', 1.2);
+    plot(th_n, lbv_n, 'b-o', 'MarkerSize', 3, 'LineWidth', 1.2);
     hold on;
-    plot([th_n(1) th_n(end)], [nn_n(1) nn_n(end)], 'k--', ...
+    plot([th_n(1) th_n(end)], [lbv_n(1) lbv_n(end)], 'k--', ...
         'LineWidth', 1.0);
-    plot(th_n(ei), nn_n(ei), 'rp', ...
+    plot(th_n(ei), lbv_n(ei), 'rp', ...
         'MarkerSize', 14, 'MarkerFaceColor', 'r');
 
     % Draw perpendicular line from elbow to chord
-    p1 = [th_n(1), nn_n(1)];
-    v  = [th_n(end), nn_n(end)] - p1;
-    w  = [th_n(ei), nn_n(ei)] - p1;
+    p1 = [th_n(1), lbv_n(1)];
+    v  = [th_n(end), lbv_n(end)] - p1;
+    w  = [th_n(ei), lbv_n(ei)] - p1;
     proj_len = dot(w, v) / dot(v, v);
     foot = p1 + proj_len * v;
-    plot([th_n(ei) foot(1)], [nn_n(ei) foot(2)], 'r-', ...
+    plot([th_n(ei) foot(1)], [lbv_n(ei) foot(2)], 'r-', ...
         'LineWidth', 1.0);
 
     xlabel('Threshold (normalized)');
-    ylabel('Mean NN dist (normalized)');
+    ylabel('Mean LBV (normalized)');
     title(sprintf('%sNormalized — max \\perp dist', label_prefix));
     grid on;
 

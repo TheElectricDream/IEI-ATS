@@ -158,27 +158,12 @@ function [normalized_output_frame, time_surface_map_raw, ...
         (sigma + counts_smooth(good_mask) .^ div_norm_exp);
 
     % ----------------------------------------------------------------
-    % 7. Outlier rejection
+    % 7. Outlier rejection (iterative 2-pass sigma clipping)
     % ----------------------------------------------------------------
-    % mean_value_pos = mean(time_surface_map(time_surface_map > 0));
-    % mean_value_neg = mean(time_surface_map(time_surface_map < 0));
-    % std_value_pos  = std(time_surface_map(time_surface_map > 0));
-    % std_value_neg  = std(time_surface_map(time_surface_map < 0));
-    % 
-    % pos_threshold = mean_value_pos + 4 * std_value_pos;
-    % neg_threshold = mean_value_neg - 4 * std_value_neg;
-    % 
-    % % Clamp outliers to the median of their polarity
-    % med_pos = median(time_surface_map(time_surface_map > 0));
-    % med_neg = median(time_surface_map(time_surface_map < 0));
-    % 
-    % time_surface_map(time_surface_map > pos_threshold) = med_pos;
-    % time_surface_map(time_surface_map < neg_threshold) = med_neg;
-
-    % time_surface_map_raw(time_surface_map > pos_threshold) = ...
-    %     median(time_surface_map_raw(time_surface_map > 0));
-    % time_surface_map_raw(time_surface_map < neg_threshold) = ...
-    %     median(time_surface_map_raw(time_surface_map < 0));
+    [time_surface_map, time_surface_map_raw] = ...
+        rejectPolarityOutliers(time_surface_map, time_surface_map_raw, 2);
+    [time_surface_map, time_surface_map_raw] = ...
+        rejectPolarityOutliers(time_surface_map, time_surface_map_raw, 2);
 
     % ----------------------------------------------------------------
     % 8. Tone mapping for display
@@ -189,4 +174,39 @@ function [normalized_output_frame, time_surface_map_raw, ...
         process.symmetricToneMappingNorm(time_surface_map, ...
         symmetric_tone_scale);
 
+end
+
+function [map, map_raw] = rejectPolarityOutliers(map, map_raw, n_sigma)
+% REJECTPOLARITYOUTLIERS  Per-polarity sigma-clipping to median.
+%
+%   [MAP, MAP_RAW] = REJECTPOLARITYOUTLIERS(MAP, MAP_RAW, N_SIGMA)
+%   clamps values beyond N_SIGMA standard deviations from the
+%   polarity-conditional mean, replacing them with the polarity
+%   median. Both MAP and MAP_RAW are clipped using the same mask
+%   (derived from MAP) so that display and feedback paths stay
+%   consistent.
+
+    for pol = [1, -1]
+        if pol == 1
+            mask = map > 0;
+        else
+            mask = map < 0;
+        end
+
+        vals = map(mask);
+        if isempty(vals), continue; end
+
+        mu  = mean(vals);
+        sig = std(vals);
+        med = median(vals);
+
+        if pol == 1
+            outliers = map > (mu + n_sigma * sig);
+        else
+            outliers = map < (mu - n_sigma * sig);
+        end
+
+        map(outliers)     = med;
+        map_raw(outliers) = median(map_raw(mask));
+    end
 end

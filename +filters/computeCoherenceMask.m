@@ -1,8 +1,8 @@
 function [norm_trace_map, norm_similarity_map, ...
-    norm_persist_map, filtered_coherence_map] = ...
+    norm_persist_map, norm_coherence_map] = ...
     computeCoherenceMask(sorted_x, sorted_y, sorted_t, imgSz, ...
     t_interval, unique_idx, pos, group_ends, coh_params, ...
-    frameIndex, norm_trace_map_prev, iei_map)
+    frameIndex, norm_trace_map_prev, std_map, mean_map)
 % COMPUTECOHERENCEMASK  Three-rule coherence filtering pipeline.
 %
 %   [NORM_TRACE_MAP, NORM_SIMILARITY_MAP, NORM_PERSIST_MAP,
@@ -23,15 +23,12 @@ function [norm_trace_map, norm_similarity_map, ...
 %     group_ends           - [K x 1] End of each pixel group.
 %     coh_params           - Struct with fields:
 %       .r_s                   - Spatial search radius (normalized)
-%       .trace_threshold       - Min neighbour distance sum for Rule 1
-%       .persistence_threshold - Max cross-frame distance for Rule 2
-%       .similarity_threshold  - Max regularity score for Rule 3
 %     frameIndex           - Current frame number (1-indexed). Rule 2
 %                           is skipped on the first frame.
 %     norm_trace_map_prev  - [imgSz] Previous frame's trace map for
 %                           persistence assessment (Rule 2).
-%     iei_map              - [imgSz] Per-pixel IEI map (current-frame
-%                           mean diff or EMA-smoothed) for Rule 3.
+%     mean_std             - [imgSz] Per-pixel std IEI mapfor Rule 3.
+%     mean_map             - [imgSz] Per-pixel mean IEI map for Rule 3.
 %
 %   Outputs:
 %     norm_trace_map       - [imgSz] Rule 1: spatial density score.
@@ -95,7 +92,7 @@ function [norm_trace_map, norm_similarity_map, ...
     % 2. Rule 3 — IEI regularity (similarity map)
     % ----------------------------------------------------------------
     [~, ~, norm_similarity_map] = filters.findSimilarities(...
-        sorted_x, sorted_y, iei_map, imgSz, 10);
+        sorted_x, sorted_y, std_map, mean_map, imgSz);
     norm_similarity_map(isnan(norm_similarity_map)) = 0;
 
     % ----------------------------------------------------------------
@@ -126,5 +123,8 @@ function [norm_trace_map, norm_similarity_map, ...
     % ----------------------------------------------------------------
     filtered_coherence_map = norm_trace_map ...
         + norm_persist_map + norm_similarity_map;
+
+    log_coherence_map = log1p(filtered_coherence_map);
+    norm_coherence_map = log_coherence_map ./ max(log_coherence_map(:));
 
 end

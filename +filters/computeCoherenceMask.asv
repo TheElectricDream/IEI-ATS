@@ -95,7 +95,7 @@ function [norm_trace_map, norm_similarity_map, ...
     % 2. Rule 3 — IEI regularity (similarity map)
     % ----------------------------------------------------------------
     [~, ~, norm_similarity_map] = filters.findSimilarities(...
-        sorted_x, sorted_y, iei_map, imgSz, 10);
+        sorted_x, sorted_y, iei_map, imgSz, 100);
     norm_similarity_map(isnan(norm_similarity_map)) = 0;
 
     % ----------------------------------------------------------------
@@ -110,14 +110,11 @@ function [norm_trace_map, norm_similarity_map, ...
         % KNN search between current and previous trace maps
         [~, ~, minDists, validIdx] = ...
             filters.findPersistenceVectorized(...
-            norm_trace_map_raw, norm_trace_map_prev, imgSz);
+            norm_trace_map, norm_trace_map_prev, imgSz);
 
         if ~isempty(validIdx)
             persist_map(validIdx) = minDists;
         end
-
-        % Reject pixels without a close predecessor
-        persist_map(persist_map > persistence_threshold) = nan;
     end
 
     % Log-normalize the persistence map

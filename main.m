@@ -36,8 +36,8 @@ hdf5Path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
 
 % Set dataset name
 %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-%fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
-fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
+fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+%fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
 %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
 
 % Set output video name
@@ -245,7 +245,7 @@ alts_params.filter_size          = 11;
 alts_params.filter_sigma         = 9.0;
 alts_params.surface_tau_release  = 3.0;
 alts_params.div_norm_exp         = 1.0;
-alts_params.symmetric_tone_scale = 3.0;
+alts_params.symmetric_tone_scale = 2.0;
 alts_activity_score.mean         = zeros(frame_total, 1);
 alts_activity_score.median       = zeros(frame_total, 1);
 alts_activity_score.std          = zeros(frame_total, 1);
@@ -560,7 +560,8 @@ for frameIndex = 1:frame_total
         [norm_trace_map, norm_similarity_map, norm_persist_map,...
             filtered_coherence_map] = filters.computeCoherenceMask(sorted_x,...
             sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
-            group_ends, coh_params, frameIndex, norm_trace_map_prev, t_mean_diff);
+            group_ends, coh_params, frameIndex, norm_trace_map_prev, t_std_diff,...
+            t_mean_diff);
 
         % Set any retention variables
         norm_trace_map_prev = norm_trace_map;
