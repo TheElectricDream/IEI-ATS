@@ -1,5 +1,6 @@
 function [norm_trace_map, norm_similarity_map, ...
-    norm_persist_map, filtered_coherence_map] = ...
+    norm_persist_map, filtered_coherence_map, trace_threshold, ...
+    persistence_threshold, similarity_threshold] = ...
     computeCoherenceMask(sorted_x, sorted_y, sorted_t, imgSz, ...
     t_interval, unique_idx, pos, group_ends, coh_params, ...
     frameIndex, norm_trace_map_prev, iei_map)
@@ -59,9 +60,9 @@ function [norm_trace_map, norm_similarity_map, ...
 %       downstream in main.m (not inside this function).
 %     - Coordinates: x = row, y = col, sub2ind(imgSz, x, y).
 %
-%   See also: coherence.findSpatialNeighbours,
-%             coherence.findSimilarities,
-%             coherence.findPersistenceVectorized
+%   See also: filters.findSpatialNeighbours,
+%             filters.findSimilarities,
+%             filters.findPersistenceVectorized
 
     % ----------------------------------------------------------------
     % 0. Parse parameters
@@ -77,7 +78,7 @@ function [norm_trace_map, norm_similarity_map, ...
     sum_exp_dist_map = zeros(imgSz);
 
     % KD-tree radius search in normalized (x, y, t) space
-    [~, distances_db] = coherence.findSpatialNeighbours(...
+    [~, distances_db] = filters.findSpatialNeighbours(...
         sorted_x, sorted_y, sorted_t, r_s, imgSz, t_interval);
 
     % Sum distances for each event
@@ -90,6 +91,8 @@ function [norm_trace_map, norm_similarity_map, ...
         sum_exp_dist_map(idx) = max(val_chunk_exp);
     end
 
+    [trace_threshold, ~] = stats.findElbowThresholdCheap(sum_exp_dist_map);
+
     % Threshold: reject spatially isolated events
     sum_exp_dist_map(sum_exp_dist_map <= trace_threshold) = 0;
 
@@ -100,8 +103,10 @@ function [norm_trace_map, norm_similarity_map, ...
     % ----------------------------------------------------------------
     % 2. Rule 3 — IEI regularity (similarity map)
     % ----------------------------------------------------------------
-    [~, ~, norm_similarity_map] = coherence.findSimilarities(...
+    [~, ~, norm_similarity_map] = filters.findSimilarities(...
         sorted_x, sorted_y, iei_map, imgSz, 10);
+
+    [similarity_threshold, ~] = stats.findElbowThresholdCheap(norm_similarity_map);
 
     % Reject regions with regularity score above threshold
     norm_similarity_map(norm_similarity_map > similarity_threshold) ...
@@ -119,12 +124,14 @@ function [norm_trace_map, norm_similarity_map, ...
 
         % KNN search between current and previous trace maps
         [~, ~, minDists, validIdx] = ...
-            coherence.findPersistenceVectorized(...
+            filters.findPersistenceVectorized(...
             norm_trace_map, norm_trace_map_prev, imgSz);
 
         if ~isempty(validIdx)
             persist_map(validIdx) = minDists;
         end
+
+        [persistence_threshold, ~] = stats.findElbowThresholdCheap(persist_map);
 
         % Reject pixels without a close predecessor
         persist_map(persist_map > persistence_threshold) = nan;

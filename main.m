@@ -17,7 +17,7 @@ close all;
 
 % Set filtering
 % Options: 'NONE', 'STC', 'BAF', 'EDF', 'STCC', 'COHERENCE'
-filterSelection = 'STCC';
+filterSelection = 'COHERENCE';
 
 % Set accumulator
 % Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
@@ -99,10 +99,19 @@ iei_map                     = zeros(imgSz);
 % --------------------
 % Define coherence parameters - Must be tuned based on t_interval
 coh_params.r_s                         = 30/imgSz(1);  % spatial radius [pixels norm]
-coh_params.trace_threshold             = 1.3;
-coh_params.persistence_threshold       = 0.0002;
-coh_params.coherence_threshold         = 0.06;
-coh_params.similarity_threshold        = 0.5;
+% coh_params.trace_threshold             = 1.3;
+% coh_params.persistence_threshold       = 0.0002;
+% coh_params.coherence_threshold         = 0.06;
+% coh_params.similarity_threshold        = 0.5;
+coh_params.trace_threshold             = 0.0;
+coh_params.persistence_threshold       = inf;
+coh_params.coherence_threshold         = 0.0;
+coh_params.similarity_threshold        = inf;
+
+
+coh_logs.trace_threshold               = zeros(frame_total, 1);
+coh_logs.persistence_threshold         = zeros(frame_total, 1);
+coh_logs.similarity_threshold          = zeros(frame_total, 1);
 
 % Initialize mask for filter
 filter_mask                 = ones(imgSz);
@@ -559,10 +568,15 @@ for frameIndex = 1:frame_total
         % ----------------------------------------------------------------%
 
         [norm_trace_map, norm_similarity_map, norm_persist_map,...
-            filtered_coherence_map] = filters.computeCoherenceMask(sorted_x,...
+            filtered_coherence_map, trace_threshold_log, ...
+            persistence_threshold_log, similarity_threshold_log] = filters.computeCoherenceMask(sorted_x,...
             sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
             group_ends, coh_params, frameIndex, norm_trace_map_prev, t_mean_diff);
     
+        coh_logs.trace_threshold(frameIndex,1) = trace_threshold_log;
+        coh_logs.persistence_threshold(frameIndex,1) = persistence_threshold_log;
+        coh_logs.similarity_threshold(frameIndex,1)  = similarity_threshold_log;
+        
         % Set any retention variables
         norm_trace_map_prev = norm_trace_map;
 
