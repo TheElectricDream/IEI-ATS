@@ -38,128 +38,134 @@ This asynchronous representation offers high temporal resolution (~1 µs), high 
 
 A **time surface** is a 2D map where each pixel stores a decayed representation of when it last fired. The classical exponential time surface takes the form:
 
-$$\mathcal{T}(x, y, t) = \exp\left(-\frac{t - t_{\text{last}}(x,y)}{\tau}\right)$$
+$$\mathcal{T}(x, y, t) = \exp\!\left(-\frac{t - t_{\text{last}}(x,y)}{\tau}\right)$$
 
-where $\tau$ is a fixed time constant controlling the decay rate. This formulation is described in Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI. 
-
-The work by Nunes et al. (2023), *"Adaptive Global Decay Process for Event Cameras,"* Proc. IEEE CVPR. is a recent improvement on the HOTS approach which adapts the parameter $$\tau$$ based on the current scene activity. However, this adaptive parameter is _global_.
-
-IEI-ATS replaces the fixed $\tau$ with a **per-pixel adaptive time constant** derived from local IEI statistics, and replaces the hard reset at each event with an exponential moving average (EMA) update rule.
+where $\tau$ is a fixed time constant controlling the decay rate. This formulation is described in Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI. IEI-ATS replaces the fixed $\tau$ with a **per-pixel adaptive time constant** derived from local IEI statistics, and replaces the hard reset at each event with an exponential moving average (EMA) update rule.
 
 ---
 
 ## Algorithm Architecture
 
-The processing pipeline operates on fixed-duration time windows (frames) accumulated from the event stream. Within each frame the following stages are executed in order:
+The processing pipeline operates on fixed-duration time windows (frames) accumulated from the event stream. Each frame passes through the following stages:
 
 ```
-Raw Events
-    │
-    ▼
-┌─────────────────────────┐
-│   Event Preparation     │  Sort, index, group by pixel
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│  Neighborhood Statistics│  IEI mean, std, mean-diff per pixel
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│  Coherence Filtering    │  Spatial density · Persistence · IEI regularity
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│  Adaptive Time Surface  │  EMA accumulation + divisive normalization
-└────────────┬────────────┘
-             │
-             ▼
-    Normalized Output Frame
+Events (x, y, t, p)
+        │
+        ▼
+┌─────────────────┐
+│  1. Statistics   │  Per-pixel IEI mean, std, diff
+│     (+stats/)    │  Persistent EMA IEI map
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  2. Coherence    │  Rule 1: Spatial density
+│     Filtering    │  Rule 2: Temporal persistence
+│  (+coherence/)   │  Rule 3: IEI regularity (CV)
+│                  │  Auto-threshold (Kneedle elbow)
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  3. Adaptive     │  Direct IEI-to-τ mapping
+│     EMA          │  Attack-release envelope
+│  Accumulation    │  First-order IIR surface update
+│  (+accumulator/) │
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  4. Divisive     │  Carandini-Heeger normalization
+│     Normalization│  Auto-scaling semi-saturation
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  5. Outlier      │  Per-polarity 4σ clipping
+│     Rejection    │  to polarity median
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  6. Tone Mapping │  Symmetric tanh compression
+│  (+process/)     │
+└────────┬────────┘
+         ▼
+   Output Surface
 ```
 
-### Stage 1 — Neighborhood Statistics
+---
 
-For each active pixel, the mean and standard deviation of the inter-event interval (IEI) within the current time window are computed. A persistent IEI map is maintained across frames using an **exponential moving average**:
+## Processing Stages
 
-$$\hat{\text{IEI}}_t = (1 - \alpha)\,\hat{\text{IEI}}_{t-1} + \alpha\,\text{IEI}_t$$
+### 1. Per-Pixel IEI Statistics
 
-where $\alpha$ is the IEI smoothing factor (`iei_alpha`). This retains temporal statistics even in sparse frames.
+Within each time window, per-pixel inter-event-interval statistics (mean, standard deviation, mean difference) are computed in batch via `computeNeighborhoodStats`. A persistent IEI map is maintained across frames using an EMA:
 
-### Stage 2 — Coherence Filtering
+$$\widehat{\text{IEI}}_t(x,y) = (1 - \alpha) \cdot \widehat{\text{IEI}}_{t-1}(x,y) + \alpha \cdot \text{IEI}_t(x,y)$$
 
-Three independent rules are combined into a scalar coherence score per pixel:
+where $\alpha$ is the IEI smoothing factor (`iei_alpha`). This gives each pixel "memory" of its typical firing rate — a pixel that was active in recent frames but quiet in the current frame retains its last blended IEI value rather than snapping to zero.
 
-#### Rule 1: Spatial Density (Trace Map)
+### 2. Three-Rule Coherence Filtering
 
-Events are tested for spatial clustering using a normalized k-d tree radius search over `(x_norm, y_norm, t_norm)` space. The summed distance to spatial neighbours within radius $r_s$ forms a density proxy. Pixels below `trace_threshold` are rejected. The result is log-normalized to compress the heavy-tailed distribution.
+Three independent scoring rules produce per-pixel maps in $[0, 1]$, which are summed to form a combined coherence score. The combined score is then auto-thresholded to produce the filter mask.
 
-#### Rule 2: Temporal Persistence
+**Rule 1 — Spatial density.** A KD-tree radius search in normalized $(x, y, t)$ space computes a density proxy from the summed nearest-neighbour distances within radius $r_s$. Results are log-normalized to compress the heavy-tailed distribution.
 
-Active regions are expected to persist across consecutive frames. For each active pixel in the current frame, the nearest active pixel in the previous frame's trace map is found using a 3D KD-tree search over normalized `(row, col, value)` space (`findPersistenceVectorized`). Pixels whose nearest predecessor exceeds `persistence_threshold` are rejected. This eliminates transient noise bursts that do not repeat across windows.
+**Rule 2 — Temporal persistence.** Cross-frame persistence is evaluated by finding the nearest active pixel in the *previous* frame's trace map via a 3D KD-tree search over normalized (row, column, value) space. Pixels whose nearest predecessor exceeds `persistence_threshold` are rejected. This rule is skipped on the first frame.
 
-#### Rule 3: IEI Regularity (Similarity Map)
+**Rule 3 — IEI regularity.** The coefficient of variation (CV = $\sigma / \mu$) of the per-pixel IEI is computed directly from the existing per-pixel statistical maps (`std_map` and `mean_map`) produced in Stage 1. The regularity score is $s_{\text{reg}} = 1 / (1 + \text{CV})$. An IEI magnitude penalty prevents noise regions (where all pixels fire slowly but uniformly) from producing artificially low CV:
 
-Real edges sweeping across the sensor produce spatially coherent firing rates — adjacent pixels along an edge fire at similar inter-event intervals. Noise events fire at uncorrelated rates relative to their neighbors. The **Coefficient of Variation** (CV = σ/μ) of the local IEI neighborhood is computed via normalized convolution over the **current-frame mean inter-event interval map** (`t_mean_diff`). Note that this is distinct from the persistent EMA IEI map (`iei_map`) used as the time constant input to the ALTS accumulator in Stage 3: the coherence rule uses the raw within-frame IEI estimate to evaluate instantaneous spatial regularity, while the accumulator uses the smoothed multi-frame history to set decay rates. Using the current-frame estimate for coherence scoring avoids latency introduced by EMA smoothing, which would delay the filter's response to newly appearing edges.
+$$s_{\text{mag}} = \exp\!\left(-\frac{\text{IEI}}{2 \cdot \widetilde{\text{IEI}}}\right)$$
 
-$$\text{CV}(x, y) = \frac{\sigma_\text{local}(x, y)}{\mu_\text{local}(x, y)}$$
+where $\widetilde{\text{IEI}}$ is the median observed IEI. The combined similarity score is $s = s_{\text{reg}} \cdot s_{\text{mag}}$. Note that this is distinct from the persistent EMA IEI map (`iei_map`) used in Stage 3: Rule 3 uses the raw within-frame IEI estimate to evaluate instantaneous spatial regularity, while the accumulator uses the smoothed multi-frame history to set decay rates.
 
-The regularity score maps CV to `[0, 1]` via:
+**Auto-thresholding.** Rather than using a fixed `coherence_threshold`, the filter mask threshold is determined automatically each frame using the Kneedle algorithm (Satopaa et al., 2011, *"Finding a 'Kneedle' in a Haystack: Detecting Knee Points in System Behavior,"* Proc. ICDCSW). The blurred coherence map values are sorted to form a monotonically decreasing curve, both axes are normalized to $[0, 1]$, and the point of maximum perpendicular distance from the chord connecting the curve endpoints identifies the elbow — the natural transition between signal and noise. An EMA smooths the detected threshold across frames to prevent frame-to-frame jitter:
 
-$$s_\text{reg} = \frac{1}{1 + \text{CV}}$$
+$$\hat{\theta}_t = \beta \cdot \theta_t + (1 - \beta) \cdot \hat{\theta}_{t-1}$$
 
-An IEI magnitude penalty is then applied to prevent pure-noise regions (where all pixels fire slowly but uniformly) from producing artificially low CV:
+where $\theta_t$ is the raw elbow threshold and $\beta$ is the `threshold_smoothing` parameter.
 
-$$s_\text{mag} = \exp\left(-\frac{\text{IEI}}{2 \cdot \tilde{\text{IEI}}}\right)$$
+### 3. Adaptive EMA Accumulation
 
-where $\tilde{\text{IEI}}$ is the median observed IEI. The combined score is $s = s_\text{reg} \cdot s_\text{mag}$, and values below `similarity_threshold` are discarded.
+**Direct IEI-to-$\tau$ mapping.** The per-pixel decay time constant is set directly from the persistent IEI map:
 
-The normalized convolution approach follows Knutsson & Westin (1993), *"Normalized and Differential Convolution,"* Proc. IEEE CVPR, pp. 515–523.
+$$\tau_{\text{active}}(x,y) = \max\!\left(\widehat{\text{IEI}}(x,y),\, \varepsilon\right)$$
 
-The three scores are summed and thresholded at `coherence_threshold` to produce the final binary/soft filter mask.
+followed by Gaussian spatial smoothing. A pixel firing every 0.05 s gets $\tau \approx 0.05$ s; a pixel firing every 0.5 s gets $\tau \approx 0.5$ s. This physics-based relationship is deterministic across frames — the same physical event rate always produces the same decay behaviour, regardless of what other pixels are doing.
 
-### Stage 3 — Adaptive Local Time Surface (ALTS)
+**Attack-release envelope.** A binary activity indicator is constructed from the coherence-filtered polarity input and expanded via morphological dilation with a disk structuring element of radius 1. This dilation bridges sub-pixel gaps in sparse event data without the boundary-smearing artifacts that Gaussian smoothing of a binary mask would cause. Active pixels use $\tau_{\text{active}}$; idle pixels use the fixed release constant $\tau_{\text{release}} \ll \tau_{\text{active}}$:
 
-The ALTS accumulator applies an **asymmetric attack-release envelope** driven by the local IEI statistics:
+$$\tau_{\text{eff}}(x,y) = \tau_{\text{active}}(x,y) \cdot m(x,y) + \tau_{\text{release}} \cdot (1 - m(x,y))$$
 
-**1) Time constant mapping:** The per-pixel IEI is used directly as the effective decay time constant:
+The activity indicator is derived from the *coherence-filtered* input (`polarity_map .* filter_mask`), not the raw polarity map. Without this ordering, pixels rejected by coherence filtering appear "active" to the envelope and receive the slow $\tau_{\text{active}}$ decay, causing trailing artifacts.
 
-$$\tau_\text{active}(x, y) = \max\left(\hat{\text{IEI}}(x,y),\ \varepsilon\right)$$
+**EMA update (first-order IIR).** The blending coefficient is computed as:
 
-where $\hat{\text{IEI}}$ is the persistent EMA-smoothed inter-event interval map and $\varepsilon$ is a small constant to prevent division by zero. Fast-firing pixels (small IEI) naturally receive small $\tau$ (fast decay); slow-firing pixels receive large $\tau$ (long memory). The active time constant is spatially smoothed with a Gaussian kernel before use to prevent pixel-sharp transitions in the envelope.
-
-**2) Attack-release envelope.** An activity indicator is constructed from the coherence-filtered polarity input and expanded spatially via **morphological dilation** with a disk structuring element of radius 1. This dilation bridges sub-pixel gaps between active pixels without introducing the amplitude amplification that Gaussian smoothing of a binary mask would cause. Active pixels (within the dilated mask) use $\tau_\text{active}$; idle pixels use the fixed release constant $\tau_\text{release} \gg \tau_\text{active}$. The blending coefficient $\alpha_\text{eff}$ is then Gaussian-smoothed to soften the spatial boundary of the envelope and prevent pixel-sharp transitions in the output surface. This asymmetric attack-release design eliminates trailing artifacts from fast-moving edges.
-
-Inactive pixels (those outside the dilated activity mask) are explicitly zeroed out after the EMA update. This is an intentional design choice: rather than holding the previous surface value, idle pixels are suppressed immediately, which eliminates trailing artifacts from fast-moving edges. The coherence filter and activity mask together ensure that real persistent edges are never incorrectly classified as inactive.
-
-**3) EMA update (first-order IIR).** The blending coefficient is computed as:
-
-$$\alpha_\text{eff} = 1 - \exp\left(-\frac{\Delta t}{\tau_\text{eff}}\right)$$
+$$\alpha_{\text{eff}}(x,y) = 1 - \exp\!\left(-\frac{\Delta t}{\tau_{\text{eff}}(x,y)}\right)$$
 
 This coupling of input gain with decay rate prevents runaway accumulation. The surface update is:
 
-$$S_t = \alpha_\text{eff} \cdot u_t + (1 - \alpha_\text{eff}) \cdot S_{t-1}$$
+$$S_t(x,y) = \alpha_{\text{eff}}(x,y) \cdot u_t(x,y) + \left(1 - \alpha_{\text{eff}}(x,y)\right) \cdot S_{t-1}(x,y)$$
 
-where $u_t$ is the signed polarity input at the current frame. Active pixels with $\alpha_\text{eff} = 0$ implement a **sample-and-hold**: the previous value is preserved exactly without decay.
+where $u_t$ is the signed polarity input weighted by the continuous coherence score. After the EMA update, pixels outside the dilated activity mask are explicitly zeroed to prevent residual energy from persisting in inactive regions.
 
-**4) Divisive normalization.** The raw EMA surface is normalized using a variant of the canonical divisive normalization model (Carandini & Heeger, 2012, *"Normalization as a canonical neural computation,"* Nature Reviews Neuroscience, 13, 51–62):
+### 4. Divisive Normalization
 
-$$\hat{S}(x,y) = \frac{S(x,y)}{\sigma_t + C_\text{smooth}(x,y)^n}$$
+The raw EMA surface is normalized using a variant of the canonical divisive normalization model (Carandini & Heeger, 2012, *"Normalization as a canonical neural computation,"* Nature Reviews Neuroscience, 13, 51–62):
 
-where $C_\text{smooth}$ is a spatially pooled event count map, $n$ is a compression exponent (`div_norm_exp`, default $1.0$), and $\sigma_t$ is a **per-frame dynamic scale** computed as the median of the spatially smoothed EMA magnitude over all active pixels:
+$$\hat{S}(x,y) = \frac{S_{\text{raw}}(x,y)}{\sigma_t + C_{\text{smooth}}(x,y)^n}$$
 
-$$\sigma_t = \text{median}\left(|S_\text{smooth}(x,y)| : |S_\text{smooth}(x,y)| > 0\\right)$$
+where $C_{\text{smooth}}$ is a spatially pooled event count map (Gaussian-filtered), $n$ is a compression exponent (`div_norm_exp`, default $1.0$), and $\sigma_t$ is a per-frame dynamic scale computed as the median of the spatially smoothed EMA magnitude over all active pixels. This makes the normalization auto-scaling: $\sigma_t$ tracks the typical activity level of the scene each frame rather than requiring a manually tuned fixed value.
 
-This makes the normalization auto-scaling: $\sigma_t$ tracks the typical activity level of the scene each frame rather than requiring a manually tuned fixed value. High-activity regions where $C_\text{smooth} \gg \sigma_t$ are compressed toward $1/C_\text{smooth}^n$; low-activity regions where $C_\text{smooth} \ll \sigma_t$ pass through nearly unchanged. Critically, the normalization is applied to a separate copy of the surface and the normalized output is never fed back into the EMA state, which prevents the self-reinforcing residuals that arise from feedback-coupled normalization.
+The normalization pool is built from unsigned event counts rather than the signed surface magnitude, preserving polarity contrast through normalization. Critically, the normalization is applied to a *separate copy* of the surface — the raw, unnormalized EMA state feeds back into the next frame's update. This prevents a feedback loop where the normalization amplifies residual values faster than the EMA decay can remove them.
 
-**5) Outlier rejection.** After divisive normalization, a per-polarity $4\sigma$ clipping step is applied to remove residual extreme values. Clipped values are replaced with the polarity median rather than a hard bound to avoid introducing discontinuities. This step handles hot pixels and isolated coherence filter leakage that survive into the normalized surface.
+### 5. Outlier Rejection
 
-**6) Tone mapping.** The final output is mapped to $[0, 1]$ using a fixed symmetric hyperbolic tangent tone curve centred at $0.5$:
+After divisive normalization, a per-polarity iterative $\sigma$-clipping step removes residual extreme values. Values beyond $n_\sigma$ standard deviations from the polarity-conditional mean are replaced with the polarity median rather than a hard bound to avoid introducing discontinuities. The clipping is applied in two passes for iterative narrowing. This handles hot pixels and isolated coherence filter leakage that survive normalization.
 
-$$\hat{S}_\text{out}(x, y) = 0.5 + 0.5 \cdot \tanh\left(\frac{\hat{S}(x,y)}{s}\right)$$
+### 6. Tone Mapping
 
-where $s$ is a scalar scale parameter controlling contrast (`scale = 3` by default). Larger $s$ produces a softer curve with more headroom for extreme values; smaller $s$ increases contrast in quiet regions. A zero-valued surface maps exactly to $0.5$ (mid-gray), preserving the signed polarity symmetry of the surface. This approach follows the sigmoid tone compression operator described in Reinhard et al. (2002), *"Photographic Tone Reproduction for Digital Images,"* ACM SIGGRAPH.
+The final output is mapped to $[0, 1]$ using a symmetric hyperbolic tangent tone curve:
+
+$$\hat{S}_{\text{out}}(x,y) = 0.5 + 0.5 \cdot \tanh\!\left(\frac{\hat{S}(x,y)}{s}\right)$$
+
+where $s$ is a scalar scale parameter (default $s = 3$). Larger $s$ produces a softer curve with more headroom for extreme values; smaller $s$ increases contrast in quiet regions. A zero-valued surface maps exactly to $0.5$ (mid-gray), preserving the signed polarity symmetry of the surface. This approach follows the sigmoid tone compression operator described in Reinhard et al. (2002), *"Photographic Tone Reproduction for Digital Images,"* ACM SIGGRAPH.
 
 ---
 
@@ -168,52 +174,48 @@ where $s$ is a scalar scale parameter controlling contrast (`scale = 3` by defau
 ```
 IEI-ATS/
 │
-├── main.m                          # Top-level processing script
+├── main.m                        
 │
 ├── +accumulator/
-│   ├── localAdaptiveTimeSurface.m  # Core ALTS accumulator (EMA + divisive norm)
-│   ├── adaptiveGlobalDecay.m       # Nunes et al. (2023) AGD reference impl.
-│   ├── timeSurface.m               # Classical exponential time surface
-│   └── speedInvariantTimeSurface.m # Speed-invariant TS (Manderscheid 2019)
+│   └── adaptiveGlobalDecay.m 
+│   └── adaptiveTimeSurfaceZhu.m 
+│   └── localAdaptiveTimeSurface.m 
+│   └── motionEncodedTimeSurface.m  
+│   └── speedInvariantTimeSurface.m 
+│   └── timeSurface.m 
 │
-├── +coherence/
-│   ├── computeCoherenceMask.m      # Main coherence pipeline (3-rule combiner)
-│   ├── findSpatialNeighbours.m     # KD-tree radius search for spatial density
-│   ├── findSimilarities.m          # CV-based IEI regularity scoring
-│   ├── findSimilaritiesLOF.m       # LOF-style similarity (experimental)
-│   └── findPersistenceVectorized.m # Cross-frame persistence via KNN search
+├── +filters/
+│   ├── computeCoherenceMask.m      
+│   ├── findSpatialNeighbours.m     
+│   ├── findSimilarities.m        
+│   └── findPersistenceVectorized.m 
+│   └── backgroundActivityFilter.m 
+│   └── eventDensityFilter.m 
+│   └── spatiotemporalCorrelation.m 
+│   └── stccFilter.m 
 │
 ├── +stats/
-│   ├── computeNeighborhoodStats.m  # Per-pixel IEI mean, std, diff stats
-│   ├── spreadEventsSpatially.m     # Spatial splatting for stat computation
-│   ├── splatTimestampMap.m         # Gaussian normalized convolution splatting
-│   └── printPercentComplete.m      # Progress reporting utility
+│   ├── computeNeighborhoodStats.m  
+│   ├── findElbowThreshold.m       
+│   └── printPercentComplete.m       
 │
 ├── +process/
-│   ├── sliceToValidRange.m         # Time-window event extraction
-│   ├── sigmoidRemap.m              # Sigmoid mapping for tau remapping
-│   ├── linearRemap.m               # Linear mapping utility
-│   ├── unwrapMap.m                 # Extract filtered events from coherence map
-│   └── generateMeshFromFrame.m     # 2D map to point cloud conversion
-│
-├── +plot/
-│   ├── initializeEventVideos.m     # Video writer initialization
-│   ├── mapToScatterPlot.m          # 3D scatter visualization
-│   ├── mapToSurfPlot.m             # Interpolated surface visualization
-│   ├── mapToPCViewer.m             # Point cloud viewer
-│   ├── mapToScaledImage.m          # 2D imagesc visualization
-│   ├── vectorsToScatterPlot.m      # Scatter from raw vectors
-│   └── visualizePersistance.m      # 3D persistence neighbourhood viz
-│
-└── +voxelization/
-    └── discretizeEventsToVoxels.m  # Spatiotemporal voxel occupancy grid
+│   ├── generateMeshFromFrame.m
+│   ├── sliceToValidRange.m  
+│   ├── symmetricToneMappingNorm.m       
+│   └── unwrapMap.m    
+│   
+└── +plot/                       
+
 ```
+
+The repository also includes reference implementations of several published methods for benchmarking. Alternative accumulators in `+accumulator/` include the classical exponential time surface (Lagorce et al., 2017), speed-invariant time surface (Manderscheid et al., 2019), adaptive global decay (Nunes et al., 2023), and others. Alternative denoising filters in `+filter/` include the background activity filter (Delbruck, 2008), spatiotemporal correlation filter (Liu et al., 2015), event density filter (Feng et al., 2020), and the STCC-Filter (Li et al., 2024). All filters share a consistent interface and are selectable via the `filterSelection` variable in `main.m`.
 
 ---
 
 ## Dependencies
 
-- **MATLAB R2021b or later** (uses `imbilatfilt`, `imdilate`, `imgaussfilt`)
+- **MATLAB R2021b or later** (uses `imdilate`, `imgaussfilt`, `imbilatfilt`)
 - **Image Processing Toolbox** — required for morphological and filter operations
 - **Statistics and Machine Learning Toolbox** — required for `createns`, `knnsearch`, `rangesearch`
 - Event data in **HDF5 format** with datasets: `/timestamp`, `/x`, `/y`, `/polarity`
@@ -229,42 +231,28 @@ To convert AEDAT4 recordings to HDF5, see the companion import script from the [
 In `main.m`, set the path and filename for your HDF5 event recording:
 
 ```matlab
-hdf5_path = '/path/to/your/datasets/';
-file_name  = 'your_recording.hdf5';
+hdf5Path = '/path/to/your/datasets/';
+fileName = 'your_recording.hdf5';
 ```
 
-### 2. Set the processing window
+### 2. Select processing algorithms
+
+Choose the filtering and accumulation methods:
 
 ```matlab
-t_start_process = 0;    % [seconds]
-t_end_process   = 10;   % [seconds]
+filterSelection      = 'COHERENCE';   % Options: 'COHERENCE', 'STC', 'BAF', 'EDF', 'STCC', 'NONE'
+accumulatorSelection = 'IEI-ATS';     % Options: 'IEI-ATS', 'HOTS', 'SITS', 'METS', 'AGD', 'EVO-ATS'
+```
+
+### 3. Set the processing window
+
+```matlab
+t_start_process = 0;     % [seconds]
+t_end_process   = 1000;  % [seconds]
 t_interval      = 0.033; % Accumulation window [seconds]
 ```
 
-### 3. Tune coherence parameters
-
-The coherence filter parameters are the most dataset-dependent settings:
-
-| Parameter | Description | Typical Range |
-|---|---|---|
-| `coh_params.r_s` | Spatial density search radius (normalized) | `0.02 – 0.08` |
-| `coh_params.trace_threshold` | Min neighbour distance sum to pass density rule | `0.5 – 3.0` |
-| `coh_params.persistence_threshold` | Max cross-frame distance to pass persistence rule | `0.0001 – 0.001` |
-| `coh_params.similarity_threshold` | Max similarity score to pass similarity rule | `0.4 – 0.6` |
-| `coh_params.coherence_threshold` | Combined score threshold for filter mask | `0.03 – 0.15` |
-
-### 4. Tune time surface parameters
-
-| Parameter | Description | Typical Range |
-|---|---|---|
-| `alts_params.dt` | Numerator for the time surface exponential | t_interval |
-| `alts_params.filter_size` | Gaussian blur filter size for ATS | `9 - 11` |
-| `alts_params.filter_sigma` | Gaussian blur filter sigma for ATS | `7.0 - 9.0` |
-| `alts_params.surface_tau_release` | Inactive pixel release constant [s] | `1.0 – 5.0` |
-| `alts_params.div_norm_exp` | Controls how aggressively high-activity regions get compressed | `0.5 - 1.5` |
-| `iei_alpha` | IEI map EMA smoothing factor | `0.5 – 0.95` |
-
-### 5. Run
+### 4. Run
 
 ```matlab
 main
@@ -274,13 +262,42 @@ Output frames are written to `videoWriters{1}` (AVI) and optionally as individua
 
 ---
 
+## Parameters
+
+### Coherence filter
+
+| Parameter | Description | Typical Range |
+|---|---|---|
+| `coh_params.r_s` | Spatial density search radius (normalized) | `0.02 – 0.08` |
+| `threshold_smoothing` | EMA smoothing factor for auto-threshold | `0.0 – 1.0` |
+
+### Accumulator
+
+| Parameter | Description | Typical Range |
+|---|---|---|
+| `alts_params.dt` | Frame duration; numerator in the EMA blending coefficient | `t_interval` |
+| `alts_params.filter_size` | Gaussian filter size for tau and gain smoothing | `9 – 11` |
+| `alts_params.filter_sigma` | Gaussian filter sigma for tau and gain smoothing | `7.0 – 9.0` |
+| `alts_params.surface_tau_release` | Release time constant for inactive pixels [s] | `1.0 – 5.0` |
+| `alts_params.div_norm_exp` | Exponent $n$ controlling compression of high-activity regions | `0.5 – 1.5` |
+| `iei_alpha` | IEI map EMA smoothing factor (higher = faster adaptation) | `0.5 – 0.95` |
+
+---
+
 ## Reference Implementations
 
-IEI-ATS includes reference implementations of several published time surface methods for benchmarking:
+IEI-ATS includes reference implementations of several published methods for benchmarking:
 
+**Accumulators (`+accumulator/`):**
 - **Classical Time Surface** — Lagorce et al. (2017), *"HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern Recognition,"* IEEE TPAMI, 39(7), 1346–1359. [IEEE](https://doi.org/10.1109/TPAMI.2016.2574707)
 - **Speed-Invariant Time Surface** — Manderscheid et al. (2019), *"Speed Invariant Time Surface for Learning to Detect Corner Points with Event-Based Cameras,"* Proc. IEEE CVPR. [IEEE](https://doi.org/10.1109/CVPR.2019.01049)
 - **Adaptive Global Decay (AGD)** — Nunes et al. (2023), *"Adaptive Global Decay Process for Event Cameras,"* Proc. IEEE CVPR. [IEEE](https://doi.org/10.1109/CVPR52729.2023.00942)
+
+**Denoising Filters (`+filter/`):**
+- **Background Activity Filter (BAF)** — Delbruck (2008), *"Frame-free dynamic digital vision,"* Proc. Intl. Symp. on Secure-Life Electronics.
+- **Spatiotemporal Correlation (STC)** — Liu et al. (2015), *"Design of a Spatiotemporal Correlation Filter for Event-based Sensors,"* Proc. IEEE ISCAS. [IEEE](https://doi.org/10.1109/ISCAS.2015.7168735)
+- **Event Density Filter (EDF)** — Feng et al. (2020), *"Event Density Based Denoising Method for Dynamic Vision Sensor,"* Applied Sciences. [MDPI](https://doi.org/10.3390/app10062024)
+- **STCC-Filter** — Li et al. (2024), *"STCC-Filter: Space-Time-Content Correlation Filter for Event Camera Noise Removal,"* Signal Processing: Image Communication. [Elsevier](https://doi.org/10.1016/j.image.2024.117135)
 
 ---
 
@@ -292,7 +309,7 @@ MIT License. Copyright (c) 2026 Alexander Crain. See [LICENSE](LICENSE) for deta
 
 ## Citation
 
-If you use IEI-ATS in your research, please cite us!
+If you use IEI-ATS in your research, please cite:
 
 ```bibtex
 @inproceedings{crain2026ieats,
@@ -306,7 +323,7 @@ If you use IEI-ATS in your research, please cite us!
 }
 ```
 
-If you use the EVOS dataset in your research, please use this citation instead:
+If you use the EVOS dataset, please cite:
 
 ```bibtex
 @misc{crain2025evos,
