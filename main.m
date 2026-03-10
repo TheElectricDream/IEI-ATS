@@ -36,8 +36,8 @@ hdf5Path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
 
 % Set dataset name
 %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
-%fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
+%fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
 %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
 
 % Set output video name
@@ -95,23 +95,13 @@ iei_alpha                   = 0.8;
 % Initialize EMA-IEI 
 iei_map                     = zeros(imgSz);
 
-% COHERENCE PARAMETERS
-% --------------------
-% Define coherence parameters - Must be tuned based on t_interval
+% COHERENCE PARAMETERS (Crain 2026)
+% ---------------------------------
+% r_s: Support window [px]. Used to identify density proxy through KD-tree
+% searches.
+%    - Smaller
 coh_params.r_s                         = 30/imgSz(1);  % spatial radius [pixels norm]
-% coh_params.trace_threshold             = 1.3;
-% coh_params.persistence_threshold       = 0.0002;
-% coh_params.coherence_threshold         = 0.06;
-% coh_params.similarity_threshold        = 0.5;
-coh_params.trace_threshold             = 0.0;
-coh_params.persistence_threshold       = inf;
-coh_params.coherence_threshold         = 0.0;
-coh_params.similarity_threshold        = inf;
-
-
-coh_logs.trace_threshold               = zeros(frame_total, 1);
-coh_logs.persistence_threshold         = zeros(frame_total, 1);
-coh_logs.similarity_threshold          = zeros(frame_total, 1);
+coh_logs.filter_threshold              = zeros(frame_total, 1);
 
 % Initialize mask for filter
 filter_mask                 = ones(imgSz);
@@ -568,15 +558,10 @@ for frameIndex = 1:frame_total
         % ----------------------------------------------------------------%
 
         [norm_trace_map, norm_similarity_map, norm_persist_map,...
-            filtered_coherence_map, trace_threshold_log, ...
-            persistence_threshold_log, similarity_threshold_log] = filters.computeCoherenceMask(sorted_x,...
+            filtered_coherence_map] = filters.computeCoherenceMask(sorted_x,...
             sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
             group_ends, coh_params, frameIndex, norm_trace_map_prev, t_mean_diff);
-    
-        coh_logs.trace_threshold(frameIndex,1) = trace_threshold_log;
-        coh_logs.persistence_threshold(frameIndex,1) = persistence_threshold_log;
-        coh_logs.similarity_threshold(frameIndex,1)  = similarity_threshold_log;
-        
+
         % Set any retention variables
         norm_trace_map_prev = norm_trace_map;
 
@@ -584,7 +569,25 @@ for frameIndex = 1:frame_total
         filter_mask = filtered_coherence_map;
         filter_mask(isnan(filter_mask)) = 0;
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
-        filter_mask(filter_mask<coh_params.coherence_threshold) = 0;
+        [th_lo, diag] = stats.findElbowThreshold(filter_mask);
+        
+        % Compute exponential moving average for th_lo (th_lo)
+        threshold_smoothing = 0.1;
+
+        if frameIndex == 1
+            % Initialize EMA with current threshold on first frame
+            th_low_ema = th_lo;
+        else
+            prev_ema = coh_logs.th_low_ema(frameIndex-1);
+            th_low_ema = threshold_smoothing * th_lo +...
+                (1 - threshold_smoothing) * prev_ema;
+        end
+        
+        % Store EMA back into coh_logs for persistence and later analysis
+        coh_logs.th_low_ema(frameIndex,1) = th_low_ema;
+
+        filter_mask(filter_mask<th_low_ema) = 0;
+        coh_logs.trace_threshold(frameIndex,1) = th_low_ema;
 
     elseif strcmp(filterSelection, 'NONE') == 1
 
