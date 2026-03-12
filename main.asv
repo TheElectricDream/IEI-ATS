@@ -98,18 +98,18 @@ iei_alpha                   = 0.8;
 iei_map                     = zeros(imgSz);
 
 % COHERENCE PARAMETERS (Crain 2026)
-% -------------------------------------------------------------------------
+% ----------------------------------
 % r_s: Support window [px]. Used to identify density proxy through KD-tree
 % searches.
 %    - Smaller
-coh_params.r_s              = 30/imgSz(1);  
-coh_logs.filter_threshold   = zeros(frame_total, 1);
+coh_params.r_s                         = 30/imgSz(1);  % spatial radius [pixels norm]
+coh_logs.filter_threshold              = zeros(frame_total, 1);
 
 % Initialize mask for filter
 filter_mask                 = ones(imgSz);
 
 % BACKGROUND ACTIVITY FILTER PARAMETERS (Delbruck 2008)
-% -------------------------------------------------------------------------
+% ---------------------------------------------------------------
 % T: Support time window [s]. An event passes if any of its 8
 %    neighbours fired within the last T seconds. This is the sole
 %    tunable parameter.
@@ -123,11 +123,13 @@ baf_params.T                = 10e-1;    % [s] support time window
 % Initialize the persistent last-event timestamp map at full
 % pixel resolution. -Inf ensures no false passes on startup.
 baf_lastTimesMap            = -Inf(imgSz);
+
+% Optional: pre-allocate storage for BAF metrics
 baf_n_passed_store          = zeros(1, frame_total);
 baf_n_total_store           = zeros(1, frame_total);
 
 % SPATIOTEMPORAL CORRELATION FILTER PARAMETERS (Liu et al. 2015)
-% -------------------------------------------------------------------------
+% ---------------------------------------------------------------
 % dT: Correlation time window [s]. An event passes if the time
 %     since the last event at its subsampled cell is less than dT.
 %     Equivalent to C*(Vrs-Vth)/I1 in the hardware (Eq. in paper).
@@ -144,23 +146,14 @@ stc_params.subsample_rate   = 2;        % 2×2 spatial subsampling
 stc_block_size = 2^stc_params.subsample_rate;
 stc_cellSz     = ceil(imgSz ./ stc_block_size);
 stc_lastTimesMap = -Inf(stc_cellSz);
+
+% Optional: pre-allocate storage for STC metrics (event counts
+% per frame, for comparison against coherence filtering)
 stc_n_passed_store = zeros(1, frame_total);
 stc_n_total_store  = zeros(1, frame_total);
 
-
-% MOTION CONSISTENCY FILTER (Wang et al., CVPR 2019)
-% -------------------------------------------------------------------------
-mcf_params.delta_t         = 0.1;   
-mcf_params.V_max           = 500;    
-mcf_params.min_neighbours  = 2;       
-mcf_eventBuffer.x = [];
-mcf_eventBuffer.y = [];
-mcf_eventBuffer.t = [];
-mcf_n_passed_store = zeros(frame_total, 1);
-mcf_n_total_store  = zeros(frame_total, 1);
-
 % EVENT DENSITY FILTER PARAMETERS (Feng et al. 2020)
-% -------------------------------------------------------------------------
+% ---------------------------------------------------------------
 % L:   Spatial neighbourhood side length (odd integer). The density
 %      matrix D is L x L centred on the event pixel. Larger L gives
 %      more spatial context but may blur the decision boundary at
@@ -198,7 +191,7 @@ edf_n_passed_store          = zeros(1, frame_total);
 edf_n_total_store           = zeros(1, frame_total);
 
 % STCC-FILTER PARAMETERS (Li et al. 2024)
-% -------------------------------------------------------------------------
+% ---------------------------------------------------------------
 % N:       Number of neighbouring events in the context window for
 %          POS and W(p) computation. The paper uses N = 1000.
 %          For the EVOS dataset with ~4000 events/frame at
@@ -234,6 +227,17 @@ stcc_params.sigma_p         = 1;        % Polarity Gaussian std dev
 stcc_params.TH              = 0.1;      % Base threshold (tune)
 stcc_n_passed_store         = zeros(1, frame_total);
 stcc_n_total_store          = zeros(1, frame_total);
+
+% MOTION CONSISTENCY FILTER (Wang et al., CVPR 2019)
+% ---------------------------------------------------------------
+mcf_params.delta_t         = 1e-1;   
+mcf_params.V_max           = 1e5;    
+mcf_params.min_neighbours  = 2;       
+mcf_eventBuffer.x = [];
+mcf_eventBuffer.y = [];
+mcf_eventBuffer.t = [];
+mcf_n_passed_store = zeros(frame_total, 1);
+mcf_n_total_store  = zeros(frame_total, 1);
 
 %% Initialize Accumulator Parameters
 
@@ -608,18 +612,23 @@ for frameIndex = 1:frame_total
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
         [th_lo, diag] = stats.findElbowThreshold(filter_mask);
         
-        % % Compute exponential moving average for th_lo
-        % threshold_smoothing = 0.1;
-        % 
-        % if frameIndex == 1
-        %     th_low_ema = th_lo;
-        % else
-        %     prev_ema = coh_logs.filter_threshold(frameIndex-1);
-        %     th_low_ema = threshold_smoothing * th_lo +...
-        %         (1 - threshold_smoothing) * prev_ema;
-        % end
+        % Compute exponential moving average for th_lo (th_lo)
+        threshold_smoothing = 0.1;
 
-        filter_mask(filter_mask<th_lo) = 0;
+        if frameIndex == 1
+            % Initialize EMA with current threshold on first frame
+            th_low_ema = th_lo;
+        else
+            prev_ema = coh_logs.th_low_ema(frameIndex-1);
+            th_low_ema = threshold_smoothing * th_lo +...
+                (1 - threshold_smoothing) * prev_ema;
+        end
+        
+        % Store EMA back into coh_logs for persistence and later analysis
+        coh_logs.th_low_ema(frameIndex,1) = th_low_ema;
+
+        filter_mask(filter_mask<th_low_ema) = 0;
+        coh_logs.trace_threshold(frameIndex,1) = th_low_ema;
 
         % Compute event-level pass/total counts for the coherence filter.
         % The other filters return these directly; coherence needs them
@@ -759,9 +768,6 @@ for frameIndex = 1:frame_total
         case 'COHERENCE'
             metrics_n_passed = coh_n_passed;
             metrics_n_total  = coh_n_total;
-        case 'MCF'
-            metrics_n_passed = mcf_n_pass;
-            metrics_n_total  = mcf_n_tot;
         case 'NONE'
             metrics_n_passed = numel(sorted_x);
             metrics_n_total  = numel(sorted_x);
