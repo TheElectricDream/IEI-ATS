@@ -17,7 +17,7 @@ close all;
 
 % Set filtering
 % Options: 'NONE', 'STC', 'BAF', 'EDF', 'STCC', 'COHERENCE'
-filterSelection = 'COHERENCE';
+filterSelection = 'BAF';
 
 % Set accumulator
 % Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
@@ -134,8 +134,8 @@ baf_n_total_store           = zeros(1, frame_total);
 %     - Shorter dT → more aggressive filtering, only fast activity
 %       passes (good for high-speed edges, rejects slow drift)
 %     - Longer dT  → more permissive, retains slower activity
-stc_params.dT               = 10e-1;    % [s] correlation window
-stc_params.subsample_rate   = 1;        % 2×2 spatial subsampling
+stc_params.dT               = 10e-3;    % [s] correlation window
+stc_params.subsample_rate   = 2;        % 2×2 spatial subsampling
 
 % Initialize the persistent last-event timestamp map at cell
 % resolution. -Inf ensures the first event at every cell always
@@ -245,7 +245,7 @@ alts_params.filter_size          = 11;
 alts_params.filter_sigma         = 9.0;
 alts_params.surface_tau_release  = 3.0;
 alts_params.div_norm_exp         = 1.0;
-alts_params.symmetric_tone_scale = 2.0;
+alts_params.symmetric_tone_scale = 1.0;
 alts_activity_score.mean         = zeros(frame_total, 1);
 alts_activity_score.median       = zeros(frame_total, 1);
 alts_activity_score.std          = zeros(frame_total, 1);
@@ -259,7 +259,7 @@ alts_frame_storage      = cell(frame_total,1);
 ts_t_map = -inf(imgSz); 
 
 % Decay constant for the visual 
-ts_time_constant = 0.05;  % [seconds]
+ts_time_constant = 2;  % [seconds]
 
 % SPEED INVARIENT TIME SURFACE PARAMETERS
 % ---------------------------------------
@@ -287,7 +287,7 @@ agd_state.last_update_time = t_start_process;
 % Note: for unfiltered events with large spikes, an aggressive smoothing 
 % factor is needed. Otherwise, the scene rests anytime it sees a hot pixel
 agd_params.alpha   = 0.001;   % Smoothing factor for activity 
-agd_params.K       = 5000000.0;  % Scaling factor (Controls "memory length")
+agd_params.K       = 50000.0;  % Scaling factor (Controls "memory length")
 agd_activity_store = zeros(length(frame_total),1);
 
 % MOTION-ENCODED TIME-SURFACE (METS) PARAMETERS
@@ -320,9 +320,9 @@ zhu_state.t_last = zeros(imgSz);
 
 % Parameters (paper does not specify exact values; these are
 % reasonable defaults for the EVOS dataset frame intervals)
-zhu_params.tau_u       = 0.5;    % Upper bound on decay [s]
-zhu_params.tau_l       = 0.01;   % Lower bound on decay [s]
-zhu_params.n_neighbors = 8;      % # of most-recent neighbors (paper uses n)
+zhu_params.tau_u       = 0.8;    % Upper bound on decay [s]
+zhu_params.tau_l       = 0.001;   % Lower bound on decay [s]
+zhu_params.n_neighbors = 16;      % # of most-recent neighbors (paper uses n)
 zhu_params.blur_sigma  = 1.0;    % Gaussian blur sigma [pixels]
 zhu_params.median_sz   = 3;      % Median filter kernel size [pixels, odd]
 
@@ -345,6 +345,24 @@ frame_time      = zeros(frame_total, 1);
 last_event_timestamp    = zeros(imgSz);
 norm_trace_map_prev     = zeros(imgSz);
 time_surface_map_prev   = zeros(imgSz);
+
+% Pre-allocate metrics storage.
+% Each element will be filled by metrics.computeFrameMetrics().
+frame_metrics(1:frame_total) = struct( ...
+    'srr', NaN, 'pixel_retention', NaN, 'polarity_balance', NaN, ...
+    'n_passed', 0, 'n_total', 0, ...
+    'n_active_pixels', 0, 'n_retained_pixels', 0, ...
+    'edge_sharpness', NaN, 'mean_gradient', NaN, ...
+    'contrast_iqr', NaN, 'noise_floor', NaN, 'surface_fill', NaN, ...
+    'temporal_ssim', NaN, 'temporal_mae', NaN, ...
+    'n_clusters', 0, 'mean_cluster_size', 0, ...
+    'largest_cluster_frac', 0);
+
+% Track the previous frame's output for temporal SSIM computation.
+% This is separate from time_surface_map_prev (which is the raw
+% unnormalized EMA state for feedback). This stores the normalized
+% display-ready output for metrics comparison.
+prev_output_for_metrics = zeros(imgSz);
 
 %% Data processing starting point
 % Loop through the figures to capture each frame
@@ -590,12 +608,21 @@ for frameIndex = 1:frame_total
         filter_mask(filter_mask<th_low_ema) = 0;
         coh_logs.trace_threshold(frameIndex,1) = th_low_ema;
 
+        % Compute event-level pass/total counts for the coherence filter.
+        % The other filters return these directly; coherence needs them
+        % derived from the pixel-level mask and event locations.
+        coh_linear_idx = sub2ind(imgSz, sorted_x(:), sorted_y(:));
+        coh_n_total  = numel(sorted_x);
+        coh_n_passed = sum(filter_mask(coh_linear_idx) > 0);
+
+
     elseif strcmp(filterSelection, 'NONE') == 1
 
         % Use a unity mask instead
         filter_mask = ones(imgSz);
 
     end
+
 
     % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
     % ========================= ACCUMULATION =============================%
@@ -662,21 +689,21 @@ for frameIndex = 1:frame_total
         % -------- SPEED INVARIENT TIME-SURFACE ACCUMULATION -------------%
         % ----------------------------------------------------------------%
         
-        % % Run the speed invarient time-surface accumulation algorithm
-        % [sits_t_map, normalized_output_frame] = ...
-        %     accumulator.speedInvariantTimeSurface(sits_t_map, sorted_x,...
-        %     sorted_y, sits_R);
+        % Run the speed invarient time-surface accumulation algorithm
+        [sits_t_map, normalized_output_frame] = ...
+            accumulator.speedInvariantTimeSurface(sits_t_map, sorted_x,...
+            sorted_y, sits_R);
 
     elseif strcmp(accumulatorSelection, 'METS') == 1
 
         % ------------ MOTION-ENCODED TIME-SURFACE (METS) ----------------%
         % ----------------------------------------------------------------%
     
-        % % Run Motion Encoded Time Surface algorithm
-        % [mets_surface, mets_state, normalized_output_frame] = ...
-        %     accumulator.motionEncodedTimeSurface(...
-        %     sorted_x, sorted_y, sorted_t, p_signed, ...
-        %     imgSz, mets_state, mets_params);
+        % Run Motion Encoded Time Surface algorithm
+        [mets_surface, mets_state, normalized_output_frame] = ...
+            accumulator.motionEncodedTimeSurface(...
+            sorted_x, sorted_y, sorted_t, p_signed, ...
+            imgSz, mets_state, mets_params);
 
     elseif strcmp(accumulatorSelection, 'EVO-ATS') == 1
 
@@ -697,6 +724,44 @@ for frameIndex = 1:frame_total
     if frameIndex == 1
         fprintf('\n--------------------------------------------\n\n');
     end
+
+    % ========================== FRAME METRICS ===========================%
+    % --------------------------------------------------------------------%
+    
+    % Determine n_passed and n_total from whichever filter ran.
+    % Each filter stores these differently; unify them here.
+    switch filterSelection
+        case 'STC'
+            metrics_n_passed = stc_n_pass;
+            metrics_n_total  = stc_n_tot;
+        case 'BAF'
+            metrics_n_passed = baf_n_pass;
+            metrics_n_total  = baf_n_tot;
+        case 'EDF'
+            metrics_n_passed = edf_n_pass;
+            metrics_n_total  = edf_n_tot;
+        case 'STCC'
+            metrics_n_passed = stcc_n_pass;
+            metrics_n_total  = stcc_n_tot;
+        case 'COHERENCE'
+            metrics_n_passed = coh_n_passed;
+            metrics_n_total  = coh_n_total;
+        case 'NONE'
+            metrics_n_passed = numel(sorted_x);
+            metrics_n_total  = numel(sorted_x);
+        otherwise
+            metrics_n_passed = 0;
+            metrics_n_total  = numel(sorted_x);
+    end
+    
+    % Compute all per-frame metrics
+    frame_metrics(frameIndex) = metrics.computeFrameMetrics( ...
+        filter_mask, sorted_x, sorted_y, sorted_t, p_signed, ...
+        imgSz, counts, normalized_output_frame, ...
+        prev_output_for_metrics, metrics_n_passed, metrics_n_total);
+    
+    % Update the previous frame reference for next iteration
+    prev_output_for_metrics = normalized_output_frame;
 
     % ------------------------ EXPORTING VIDEO ---------------------------%
     % --------------------------------------------------------------------%
@@ -749,5 +814,18 @@ end
 for videosIdx = 1:length(videoWriters)
     close(videoWriters{videosIdx});
 end
+
+% Compute and display aggregate metrics
+metrics_summary = metrics.summarizeMetrics(frame_metrics, frame_time);
+
+% Save metrics to disk for later comparison
+metricsOutPath = fullfile('/home/alexandercrain/Videos/Research', ...
+    sprintf('Metrics-Fltr-%s-Acmtr-%s-%s.mat', ...
+    filterSelection, accumulatorSelection, ...
+    datestr(now, 'yyyymmdd-HHMMSS'))); %#ok<TNOW1,DATST>
+save(metricsOutPath, 'frame_metrics', 'metrics_summary', ...
+    'filterSelection', 'accumulatorSelection', ...
+    't_interval', 'frame_total');
+fprintf('Metrics saved to: %s\n', metricsOutPath);
 
 

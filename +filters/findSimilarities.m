@@ -54,7 +54,6 @@ function [similarity_score, cv_map, regularity_map] = findSimilarities(sorted_x,
 %     - The observation mask uses mean_map > 0 to identify pixels that
 %       have received at least one event update.
 %
-%   See also: coherence.computeCoherenceMask, features.detectHarrisCV
 
     % ----------------------------------------------------------------
     % 1. Observation mask
