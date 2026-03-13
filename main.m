@@ -1,27 +1,27 @@
-clear;
-clc;
-close all;
+isLooping = true;
 
-%% Processing pipeline reminder
-% To import AEDAT4 -->
-% /home/alexandercrain/Repositories/CNN/import/importAEDAT4toHDF5.py
+if isLooping == false
 
-% All datasets --> /home/alexandercrain/Dropbox/Graduate Documents/
-% Doctor of Philosophy/Thesis Research/Datasets/SPOT
+    clear;
+    clc;
+    close all;
+    
+    % Select algorithms for filtering and accumulation
+    % Set 'None' for filter selection to skip filtering entirely
+    
+    % Set filtering
+    % Options: 'NONE', 'STC', 'BAF', 'EDF', 'STCC', 'MCF', 'COH'
+    filterSelection = 'COH';
+    
+    % Set accumulator
+    % Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
+    accumulatorSelection = 'IEI-ATS';
 
-% Datasets for MATLAB --> /home/alexandercrain/Dropbox/Graduate Documents/
-% Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5
+else
+    
+    accumulatorSelection = 'IEI-ATS';
 
-%% Select algorithms for filtering and accumulation
-% Set 'None' for filter selection to skip filtering entirely
-
-% Set filtering
-% Options: 'NONE', 'STC', 'BAF', 'EDF', 'STCC', 'MCF', 'COHERENCE'
-filterSelection = 'MCF';
-
-% Set accumulator
-% Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
-accumulatorSelection = 'IEI-ATS';
+end
 
 %% Define processing range
 % Define start and end time to process [seconds]
@@ -75,7 +75,7 @@ clearvars valid_idx;
 
 %% Initialize General Parameters
 % GENERAL PARAMETERS
-% ------------------
+% -------------------------------------------------------------------------
 % Set the image size
 imgSz                       = [640, 480]; 
 
@@ -89,24 +89,21 @@ filter_output_image         = false;
 
 %% Initialize Filter Parameters
 
-% INTER-EVENT-INTERVAL
+% COH PARAMETERS (Crain 2026)
 % -------------------------------------------------------------------------
-% Persistent inter-event-interval map (EMA) parameter
-iei_alpha                   = 0.8;     
-
-% Initialize EMA-IEI 
-iei_map                     = zeros(imgSz);
-
-% COHERENCE PARAMETERS (Crain 2026)
-% -------------------------------------------------------------------------
-% r_s: Support window [px]. Used to identify density proxy through KD-tree
+% r_s: Support window [-]. Used to identify density proxy through KD-tree
 % searches.
-%    - Smaller
-coh_params.r_s              = 30/imgSz(1);  
-coh_logs.filter_threshold   = zeros(frame_total, 1);
+%    - Smaller r_s -> fewer events will be included in density proxy
+%    - Bigger r_s -> more events will be included in density proxy 
+% iei_alpha: Decay factor [-]. Used to control how much
+% inter-event-interval values linger in the iei_map.
+coh_params.r_s              = 30/imgSz(1);  % [-]
+coh_params.iei_alpha        = 0.8;  % [-]
 
-% Initialize mask for filter
+% Initialize maps
 filter_mask                 = ones(imgSz);
+iei_map                     = zeros(imgSz);
+coh_logs.filter_threshold   = zeros(frame_total, 1);
 
 % BACKGROUND ACTIVITY FILTER PARAMETERS (Delbruck 2008)
 % -------------------------------------------------------------------------
@@ -114,10 +111,9 @@ filter_mask                 = ones(imgSz);
 %    neighbours fired within the last T seconds. This is the sole
 %    tunable parameter.
 %
-%    - Shorter T → aggressive filtering, only tight spatiotemporal
+%    - Shorter T -> aggressive filtering, only tight spatiotemporal
 %      clusters survive (fast edges with high event density)
-%    - Longer T  → permissive, retains slower/sparser activity
-
+%    - Longer T  -> permissive, retains slower/sparser activity
 baf_params.T                = 10e-1;    % [s] support time window
 
 % Initialize the persistent last-event timestamp map at full
@@ -131,9 +127,9 @@ baf_n_total_store           = zeros(1, frame_total);
 % dT: Correlation time window [s]. An event passes if the time
 %     since the last event at its subsampled cell is less than dT.
 %     Equivalent to C*(Vrs-Vth)/I1 in the hardware (Eq. in paper).
-%     - Shorter dT → more aggressive filtering, only fast activity
+%     - Shorter dT -> more aggressive filtering, only fast activity
 %       passes (good for high-speed edges, rejects slow drift)
-%     - Longer dT  → more permissive, retains slower activity
+%     - Longer dT  -> more permissive, retains slower activity
 stc_params.dT               = 10e-3;    % [s] correlation window
 stc_params.subsample_rate   = 2;        % 2×2 spatial subsampling
 
@@ -146,7 +142,6 @@ stc_cellSz     = ceil(imgSz ./ stc_block_size);
 stc_lastTimesMap = -Inf(stc_cellSz);
 stc_n_passed_store = zeros(1, frame_total);
 stc_n_total_store  = zeros(1, frame_total);
-
 
 % MOTION CONSISTENCY FILTER (Wang et al., CVPR 2019)
 % -------------------------------------------------------------------------
@@ -222,8 +217,8 @@ edf_n_total_store           = zeros(1, frame_total);
 %
 % TH:      Base discrimination threshold for POS.
 %          Events pass if POS > TH / W(p).
-%          This is the primary tuning knob. Lower TH → more
-%          permissive (more events pass). Higher TH → more
+%          This is the primary tuning knob. Lower TH -> more
+%          permissive (more events pass). Higher TH -> more
 %          aggressive filtering. Start with 0.05–0.2 and adjust
 %          based on visual inspection of the output.
 
@@ -349,14 +344,8 @@ time_surface_map_prev   = zeros(imgSz);
 % Pre-allocate metrics storage.
 % Each element will be filled by metrics.computeFrameMetrics().
 frame_metrics(1:frame_total) = struct( ...
-    'srr', NaN, 'pixel_retention', NaN, 'polarity_balance', NaN, ...
-    'n_passed', 0, 'n_total', 0, ...
-    'n_active_pixels', 0, 'n_retained_pixels', 0, ...
-    'edge_sharpness', NaN, 'mean_gradient', NaN, ...
-    'contrast_iqr', NaN, 'noise_floor', NaN, 'surface_fill', NaN, ...
-    'temporal_ssim', NaN, 'temporal_mae', NaN, ...
-    'n_clusters', 0, 'mean_cluster_size', 0, ...
-    'largest_cluster_frac', 0);
+    'SRR', NaN, 'ClarkEvans', NaN, 'ComputeTime', NaN, 'EventsInFrame',...
+    NaN, 'FilteredEvents', NaN);
 
 % Track the previous frame's output for temporal SSIM computation.
 % This is separate from time_surface_map_prev (which is the raw
@@ -470,8 +459,8 @@ for frameIndex = 1:frame_total
     % Update a persistant map of the inter-event interval so that sparse
     % data is retained
     new_obs_mask = (t_mean_diff > 0); 
-    iei_map(new_obs_mask) = (1 - iei_alpha) .* iei_map(new_obs_mask) +...
-        iei_alpha .* t_mean_diff(new_obs_mask);
+    iei_map(new_obs_mask) = (1 - coh_params.iei_alpha) .* iei_map(new_obs_mask) +...
+        coh_params.iei_alpha .* t_mean_diff(new_obs_mask);
 
     % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
     % =========================== FILTERING ==============================%
@@ -588,13 +577,13 @@ for frameIndex = 1:frame_total
         mcf_n_total_store(frameIndex)  = mcf_n_tot;
         
 
-    elseif strcmp(filterSelection, 'COHERENCE') == 1
+    elseif strcmp(filterSelection, 'COH') == 1
 
-        % --------------------- COHERENCE FILTER -------------------------%
+        % --------------------- COH FILTER -------------------------%
         % ----------------------------------------------------------------%
 
         [norm_trace_map, norm_similarity_map, norm_persist_map,...
-            filtered_coherence_map] = filters.computeCoherenceMask(sorted_x,...
+            filtered_COH_map] = filters.computeCOHMask(sorted_x,...
             sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
             group_ends, coh_params, frameIndex, norm_trace_map_prev, t_std_diff,...
             t_mean_diff);
@@ -603,7 +592,7 @@ for frameIndex = 1:frame_total
         norm_trace_map_prev = norm_trace_map;
 
         % Create the filter
-        filter_mask = filtered_coherence_map;
+        filter_mask = filtered_COH_map;
         filter_mask(isnan(filter_mask)) = 0;
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
         [th_lo, diag] = stats.findElbowThreshold(filter_mask);
@@ -618,11 +607,16 @@ for frameIndex = 1:frame_total
         %     th_low_ema = threshold_smoothing * th_lo +...
         %         (1 - threshold_smoothing) * prev_ema;
         % end
+        temporary_filter_mask = filter_mask;
+        temporary_filter_mask(filter_mask >= th_lo) = 0;
+        temporary_filter_mask(temporary_filter_mask>0) = 1;
+        % Optionally keep original filter_mask unchanged for later use:
+        filter_mask(filter_mask < th_lo) = 0;
 
-        filter_mask(filter_mask<th_lo) = 0;
+        coh_logs.filter_threshold(frameIndex) = th_lo;
 
-        % Compute event-level pass/total counts for the coherence filter.
-        % The other filters return these directly; coherence needs them
+        % Compute event-level pass/total counts for the COH filter.
+        % The other filters return these directly; COH needs them
         % derived from the pixel-level mask and event locations.
         coh_linear_idx = sub2ind(imgSz, sorted_x(:), sorted_y(:));
         coh_n_total  = numel(sorted_x);
@@ -747,34 +741,50 @@ for frameIndex = 1:frame_total
         case 'STC'
             metrics_n_passed = stc_n_pass;
             metrics_n_total  = stc_n_tot;
+            metrics_background_map = filter_mask;
         case 'BAF'
             metrics_n_passed = baf_n_pass;
             metrics_n_total  = baf_n_tot;
+            metrics_background_map = filter_mask;
         case 'EDF'
             metrics_n_passed = edf_n_pass;
             metrics_n_total  = edf_n_tot;
+            metrics_background_map = filter_mask;
         case 'STCC'
             metrics_n_passed = stcc_n_pass;
             metrics_n_total  = stcc_n_tot;
-        case 'COHERENCE'
+            metrics_background_map = filter_mask;
+        case 'COH'
             metrics_n_passed = coh_n_passed;
             metrics_n_total  = coh_n_total;
+            metrics_background_map = temporary_filter_mask.*filtered_COH_map;
         case 'MCF'
             metrics_n_passed = mcf_n_pass;
             metrics_n_total  = mcf_n_tot;
+            metrics_background_map = filter_mask;
         case 'NONE'
             metrics_n_passed = numel(sorted_x);
             metrics_n_total  = numel(sorted_x);
+            metrics_background_map = ones(imgSz);
         otherwise
             metrics_n_passed = 0;
             metrics_n_total  = numel(sorted_x);
+            metrics_background_map = ones(imgSz);
     end
+
+    % Log processing time
+    frame_time(frameIndex) = toc;
     
     % Compute all per-frame metrics
-    frame_metrics(frameIndex) = metrics.computeFrameMetrics( ...
-        filter_mask, sorted_x, sorted_y, sorted_t, p_signed, ...
-        imgSz, counts, normalized_output_frame, ...
-        prev_output_for_metrics, metrics_n_passed, metrics_n_total);
+    % frame_metrics(frameIndex) = metrics.computeFrameMetrics( ...
+    %     filter_mask, sorted_x, sorted_y, sorted_t, p_signed, ...
+    %     imgSz, counts, normalized_output_frame, ...
+    %     prev_output_for_metrics, metrics_n_passed, metrics_n_total);
+    frame_metrics(frameIndex).SRR = metrics.computeSignalRetentionRate(metrics_n_passed, metrics_n_total);
+    frame_metrics(frameIndex).ClarkEvans = metrics.computeClarkEvans(metrics_background_map);
+    frame_metrics(frameIndex).ComputeTime = frame_time(frameIndex);
+    frame_metrics(frameIndex).EventsInFrame = metrics_n_total;
+    frame_metrics(frameIndex).FilteredEvents = metrics_n_total-metrics_n_passed;
     
     % Update the previous frame reference for next iteration
     prev_output_for_metrics = normalized_output_frame;
@@ -793,8 +803,6 @@ for frameIndex = 1:frame_total
              3.0,"FilterSize",3); 
     end
 
-    % Log processing time
-    frame_time(frameIndex) = toc;
 
     if atsOut
         % Capture the frame for the video writer
@@ -831,17 +839,17 @@ for videosIdx = 1:length(videoWriters)
     close(videoWriters{videosIdx});
 end
 
-% Compute and display aggregate metrics
-metrics_summary = metrics.summarizeMetrics(frame_metrics, frame_time);
-
-% Save metrics to disk for later comparison
-metricsOutPath = fullfile('/home/alexandercrain/Videos/Research', ...
-    sprintf('Metrics-Fltr-%s-Acmtr-%s-%s.mat', ...
-    filterSelection, accumulatorSelection, ...
-    datestr(now, 'yyyymmdd-HHMMSS'))); %#ok<TNOW1,DATST>
-save(metricsOutPath, 'frame_metrics', 'metrics_summary', ...
-    'filterSelection', 'accumulatorSelection', ...
-    't_interval', 'frame_total');
-fprintf('Metrics saved to: %s\n', metricsOutPath);
+% % Compute and display aggregate metrics
+% metrics_summary = metrics.summarizeMetrics(frame_metrics, frame_time);
+% 
+% % Save metrics to disk for later comparison
+% metricsOutPath = fullfile('/home/alexandercrain/Videos/Research', ...
+%     sprintf('Metrics-Fltr-%s-Acmtr-%s-%s.mat', ...
+%     filterSelection, accumulatorSelection, ...
+%     datestr(now, 'yyyymmdd-HHMMSS'))); %#ok<TNOW1,DATST>
+% save(metricsOutPath, 'frame_metrics', 'metrics_summary', ...
+%     'filterSelection', 'accumulatorSelection', ...
+%     't_interval', 'frame_total');
+% fprintf('Metrics saved to: %s\n', metricsOutPath);
 
 
