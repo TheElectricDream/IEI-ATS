@@ -93,12 +93,16 @@ function [y_label, display_name] = metricLabel(name)
 %   metric only requires one new entry here.
 
     lookup = { ...
-        % field name            y-axis label                    display name
-        'SRR',                  'Signal Retention Rate',        'Signal Retention Rate (SRR)';
-        'ClarkEvans',           'Clark-Evans',        'Clark Evans';
-        'ComputeTime',           'Compute Time',        'Time per Frame';
-        'EventsInFrame',           'Event Total',        'Total Events per Frame';  
-        'FilteredEvents',           'Total Filtered Events',        'Total Filtered Events per Frame';  
+        % field name                    y-axis label                        display name
+        'SRR',                          'Signal Retention Rate',            'Signal Retention Rate (SRR)'; 
+        'ClarkEvansRemaining',                   'Clark-Evans (Background)',                      'Clark Evans';
+        'ClarkEvansRemoved',                   'Clark-Evans (Foreground)',                      'Clark Evans';
+        'ComputeTimeFilter',            'Compute Time (s)',                 'Compute Time (Filter)';
+        'ComputeTimeAccumulator',       'Compute Time (s)',                 'Compute Time (Accumulator)';
+        'EventsInFrame',                'Event Count',                      'Total Events per Frame';
+        'FilteredEvents',               'Filtered Event Count',             'Total Filtered Events per Frame';
+        'FilteringMEVs',                'MEVs / s',                         'Filtering MEVs (events per second)';
+        'AccumulatorMEVs',              'MEVs / s',                         'Accumulator MEVs (events per second)';
     };
 
     idx = find(strcmp(lookup(:,1), name), 1);

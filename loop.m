@@ -1,3 +1,4 @@
+% Clear out all variables
 clear;    
 clc;     
 close all; 
