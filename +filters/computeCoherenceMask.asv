@@ -68,10 +68,10 @@ function [norm_trace_map, norm_similarity_map, ...
     % ----------------------------------------------------------------
     % 1. Rule 1 — Spatial density (trace map)
     % ----------------------------------------------------------------
-    % sum_exp_dist_map = zeros(imgSz);
-    % 
-    % % % KD-tree radius search in normalized (x, y, t) space
-    % % % tic;
+    sum_exp_dist_map = zeros(imgSz);
+
+    % % KD-tree radius search in normalized (x, y, t) space
+    % % tic;
     % [~, distances_db] = filters.findSpatialNeighbours(...
     %     sorted_x, sorted_y, sorted_t, r_s, imgSz, t_interval);
     % 
@@ -84,7 +84,7 @@ function [norm_trace_map, norm_similarity_map, ...
     %     idx = unique_idx(k);
     %     sum_exp_dist_map(idx) = max(val_chunk_exp);
     % end
-    % % % toc;
+    % % toc;
     
     % Temporal binning at pixel-equivalent resolution
     Nt = max(round(t_interval / (r_s * t_interval)), 1);
@@ -92,17 +92,12 @@ function [norm_trace_map, norm_similarity_map, ...
     
     % 3D event histogram at full spatial resolution
     V = accumarray([sorted_x, sorted_y, tb], 1, [imgSz(1) imgSz(2) Nt]);
-      
-    kr_x = round(r_s * imgSz(1));
-    kr_y = round(r_s * imgSz(2));
-    kr_t = round(r_s * Nt);
     
-    [kx, ky, kt] = ndgrid(-kr_x:kr_x, -kr_y:kr_y, -kr_t:kr_t);
+    % Box kernel: r_s in each normalized dimension mapped to voxels
+    K = ones(2*round(r_s*imgSz(1))+1, 2*round(r_s*imgSz(2))+1, 2*round(r_s*Nt)+1);
     
-    % Normalize kernel indices back to the same units as the point cloud
-    K = sqrt((kx/imgSz(1)).^2 + (ky/imgSz(2)).^2 + (kt/Nt).^2);
-    K(K > r_s) = 0;
-    
+    % Density = count / volume
+    %density = convn(V, K, 'same') / (r_s^3);
     density = convn(V, K, 'same');
     
     % Sample per-event, then max per-pixel
@@ -111,7 +106,7 @@ function [norm_trace_map, norm_similarity_map, ...
     sum_exp_dist_map = accumarray([sorted_x, sorted_y], sum_exp_dist, imgSz, @max, 0);
 
     % Log-normalize to compress the heavy-tailed distribution
-    log_trace_map = log1p(sum_exp_dist_map');
+    log_trace_map = log1p(sum_exp_dist_map./60');
     norm_trace_map = log_trace_map' ./ max(log_trace_map(:));
 
     % log_trace_map_trace_proxy = log1p(trace_proxy');

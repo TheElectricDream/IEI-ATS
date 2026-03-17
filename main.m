@@ -1,7 +1,7 @@
 %% Loop control
 % Set this to "true" to run this code in a loop across all available
 % filters
-isLooping = true;
+isLooping = false;
 
 % If-else logic for the loop
 if isLooping == false
@@ -42,8 +42,8 @@ hdf5Path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
     '/Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5/'];
 
 % Set dataset name
-%fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
+%fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
 %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
 %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
 
@@ -52,33 +52,41 @@ videoOutPath = fullfile('/home/alexandercrain/Videos/Research', ...
     sprintf('Normalized-Output-Fltr-%s-Acmtr-%s-%s.avi', ...
     filterSelection, accumulatorSelection, datestr(now,'yyyymmdd-HHMMSS'))); %#ok<TNOW1,DATST>
 
-% Load the data
-tk = double(h5read([hdf5Path fileName], '/timestamp'));
-xk = single(h5read([hdf5Path fileName], '/x'));
-yk = single(h5read([hdf5Path fileName], '/y'));
-pk = single(h5read([hdf5Path fileName], '/polarity'));
+% % Load the data
+% tk = double(h5read([hdf5Path fileName], '/timestamp'));
+% xk = single(h5read([hdf5Path fileName], '/x'));
+% yk = single(h5read([hdf5Path fileName], '/y'));
+% pk = single(h5read([hdf5Path fileName], '/polarity'));
+% 
+% % Convert time to seconds
+% tk = (tk - tk(1))/1e6;
+% 
+% % Convert to single data type to use less memory
+% tk = single(tk);
+% 
+% % Find indices within the valid range
+% valid_idx = tk >= t_start_process & tk <= t_end_process;
+% 
+% % Filter the data vectors
+% tk = tk(valid_idx);
+% xk = xk(valid_idx);
+% yk = yk(valid_idx);
+% pk = pk(valid_idx);
+% 
+% % Shift time to start at 0 for the new window
+% % This ensures your frame loop starts correctly at frame 1
+% tk = tk - t_start_process; 
+% 
+% % Clear unused variables for memory
+% clearvars valid_idx;
 
-% Convert time to seconds
-tk = (tk - tk(1))/1e6;
+% Create buffered event reader
+buf = process.EventBuffer(fullfile(hdf5Path, fileName), ...
+    t_start_process, t_end_process);
 
-% Convert to single data type to use less memory
-tk = single(tk);
-
-% Find indices within the valid range
-valid_idx = tk >= t_start_process & tk <= t_end_process;
-
-% Filter the data vectors
-tk = tk(valid_idx);
-xk = xk(valid_idx);
-yk = yk(valid_idx);
-pk = pk(valid_idx);
-
-% Shift time to start at 0 for the new window
-% This ensures your frame loop starts correctly at frame 1
-tk = tk - t_start_process; 
-
-% Clear unused variables for memory
-clearvars valid_idx;
+t_interval                  = 0.33;     % [s]
+t_total     = buf.t_total;
+frame_total = floor(t_total / t_interval);
 
 %% Initialize General Parameters
 % GENERAL PARAMETERS
@@ -87,9 +95,9 @@ clearvars valid_idx;
 imgSz                       = [640, 480]; 
 
 % Set the time interval to accumulate over
-t_interval                  = 0.33;     % [s]
-t_total                     = max(tk);  % [s]
-frame_total                 = floor(t_total/t_interval);
+% t_interval                  = 0.33;     % [s]
+% t_total                     = max(tk);  % [s]
+% frame_total                 = floor(t_total/t_interval);
 
 %% Initialize Filter Parameters
 
@@ -619,7 +627,6 @@ alts_params.symmetric_tone_scale = 1.0;
 alts_activity_score.mean         = zeros(frame_total, 1);
 alts_activity_score.median       = zeros(frame_total, 1);
 alts_activity_score.std          = zeros(frame_total, 1);
-alts_frame_storage               = cell(frame_total,1);
 
 %% Initialize all figure code for video output
 % Indicate which videos should be saved
@@ -632,8 +639,8 @@ atsOut = true;
 
 %% Initialize data storage and perform data optimizations
 % Identify number of events
-current_idx     = 1;
-n_events        = length(tk);
+% current_idx     = 1;
+% n_events        = length(tk);
 frame_time      = zeros(frame_total, 1);
 
 % Initialize per-pixel timestamp tracking
@@ -675,15 +682,10 @@ for frameIndex = 1:frame_total
     t_range_c = (frameIndex - 1) * t_interval;
     t_range_n = (t_range_c+t_interval);
 
-    % Slice the events to a valid range
-    [current_idx, x_valid, y_valid, t_valid, p_valid] = ...
-    process.sliceToValidRange(t_range_n, xk, yk, tk, pk, imgSz, current_idx);
-
-    % Store the valid event data in the output structure
-    output_struct.x_valid{frameIndex} = x_valid;
-    output_struct.y_valid{frameIndex} = y_valid;
-    output_struct.t_valid{frameIndex} = t_valid;
-    output_struct.p_valid{frameIndex} = p_valid;
+    % % Slice the events to a valid range
+    % [current_idx, x_valid, y_valid, t_valid, p_valid] = ...
+    % process.sliceToValidRange(t_range_n, xk, yk, tk, pk, imgSz, current_idx);
+    [x_valid, y_valid, t_valid, p_valid] = buf.nextWindow(t_range_n, imgSz);
 
     % Confirm the presence of valid events in the packet
     % If no events are present, we skip this frame
@@ -751,7 +753,6 @@ for frameIndex = 1:frame_total
 
     % ------------------------- STATISTICS -------------------------------%
     % --------------------------------------------------------------------%
-
     [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff] = ...
         stats.computeNeighborhoodStats(sorted_t, unique_idx, pos, ...
         group_ends, imgSz);
@@ -911,9 +912,6 @@ for frameIndex = 1:frame_total
     
         % Set any retention variables
         time_surface_map_prev = time_surface_map_raw;
-
-        % Store the processed frames for later use
-        alts_frame_storage{frameIndex} = normalized_output_frame;
 
         % Store the adaptive map score
         alts_activity_score.mean(frameIndex) = mean(adaptive_gains...
