@@ -107,13 +107,13 @@ function [normalized_output_frame, time_surface_map_raw, ...
 
     % Morphological dilation bridges sub-pixel gaps without the
     % amplitude amplification that Gaussian blur would cause.
-    se = strel('disk', 1);
+    se = strel('disk', 2);
     activity_blurred = imdilate(activity_indicator, se);
 
     % ----------------------------------------------------------------
     % 3. Asymmetric attack-release envelope
     % ----------------------------------------------------------------
-    tau_effective = tau_active .* activity_blurred + ...
+    tau_effective = tau_filtered .* activity_blurred + ...
                     surface_tau_release .* (1 - activity_blurred);
 
     % ----------------------------------------------------------------
@@ -160,10 +160,12 @@ function [normalized_output_frame, time_surface_map_raw, ...
     % ----------------------------------------------------------------
     % 7. Outlier rejection (iterative 2-pass sigma clipping)
     % ----------------------------------------------------------------
-    [time_surface_map, time_surface_map_raw] = ...
-        rejectPolarityOutliers(time_surface_map, time_surface_map_raw, 2);
-    [time_surface_map, time_surface_map_raw] = ...
-        rejectPolarityOutliers(time_surface_map, time_surface_map_raw, 2);
+    for i = 1:10
+        [time_surface_map, time_surface_map_raw] = ...
+            stats.rejectPolarityOutliers(time_surface_map, time_surface_map_raw, 2);
+    end
+    % [time_surface_map, time_surface_map_raw] = ...
+    %     rejectPolarityOutliers(time_surface_map, time_surface_map_raw, 2);
 
     % ----------------------------------------------------------------
     % 8. Tone mapping for display
@@ -176,37 +178,3 @@ function [normalized_output_frame, time_surface_map_raw, ...
 
 end
 
-function [map, map_raw] = rejectPolarityOutliers(map, map_raw, n_sigma)
-% REJECTPOLARITYOUTLIERS  Per-polarity sigma-clipping to median.
-%
-%   [MAP, MAP_RAW] = REJECTPOLARITYOUTLIERS(MAP, MAP_RAW, N_SIGMA)
-%   clamps values beyond N_SIGMA standard deviations from the
-%   polarity-conditional mean, replacing them with the polarity
-%   median. Both MAP and MAP_RAW are clipped using the same mask
-%   (derived from MAP) so that display and feedback paths stay
-%   consistent.
-
-    for pol = [1, -1]
-        if pol == 1
-            mask = map > 0;
-        else
-            mask = map < 0;
-        end
-
-        vals = map(mask);
-        if isempty(vals), continue; end
-
-        mu  = mean(vals);
-        sig = std(vals);
-        med = median(vals);
-
-        if pol == 1
-            outliers = map > (mu + n_sigma * sig);
-        else
-            outliers = map < (mu - n_sigma * sig);
-        end
-
-        map(outliers)     = med;
-        map_raw(outliers) = median(map_raw(mask));
-    end
-end

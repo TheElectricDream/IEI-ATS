@@ -10,6 +10,9 @@ if isLooping == false
     clear;
     clc;
     close all;
+
+    % Use buffered data
+    useBuffer = false;
     
     % Select algorithms for filtering and accumulation
     % Set 'None' for filter selection to skip filtering entirely
@@ -23,6 +26,9 @@ if isLooping == false
     accumulatorSelection = 'IEI-ATS';
 
 else
+
+    % Use buffered data
+    useBuffer = false;
 
     % Set accumulator
     % Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
@@ -52,52 +58,56 @@ videoOutPath = fullfile('/home/alexandercrain/Videos/Research', ...
     sprintf('Normalized-Output-Fltr-%s-Acmtr-%s-%s.avi', ...
     filterSelection, accumulatorSelection, datestr(now,'yyyymmdd-HHMMSS'))); %#ok<TNOW1,DATST>
 
-% % Load the data
-% tk = double(h5read([hdf5Path fileName], '/timestamp'));
-% xk = single(h5read([hdf5Path fileName], '/x'));
-% yk = single(h5read([hdf5Path fileName], '/y'));
-% pk = single(h5read([hdf5Path fileName], '/polarity'));
-% 
-% % Convert time to seconds
-% tk = (tk - tk(1))/1e6;
-% 
-% % Convert to single data type to use less memory
-% tk = single(tk);
-% 
-% % Find indices within the valid range
-% valid_idx = tk >= t_start_process & tk <= t_end_process;
-% 
-% % Filter the data vectors
-% tk = tk(valid_idx);
-% xk = xk(valid_idx);
-% yk = yk(valid_idx);
-% pk = pk(valid_idx);
-% 
-% % Shift time to start at 0 for the new window
-% % This ensures your frame loop starts correctly at frame 1
-% tk = tk - t_start_process; 
-% 
-% % Clear unused variables for memory
-% clearvars valid_idx;
+if useBuffer == false
 
-% Create buffered event reader
-buf = process.EventBuffer(fullfile(hdf5Path, fileName), ...
-    t_start_process, t_end_process);
+    % Load the data
+    tk = double(h5read([hdf5Path fileName], '/timestamp'));
+    xk = single(h5read([hdf5Path fileName], '/x'));
+    yk = single(h5read([hdf5Path fileName], '/y'));
+    pk = single(h5read([hdf5Path fileName], '/polarity'));
+    
+    % Convert time to seconds
+    tk = (tk - tk(1))/1e6;
+    
+    % Convert to single data type to use less memory
+    tk = single(tk);
+    
+    % Find indices within the valid range
+    valid_idx = tk >= t_start_process & tk <= t_end_process;
+    
+    % Filter the data vectors
+    tk = tk(valid_idx);
+    xk = xk(valid_idx);
+    yk = yk(valid_idx);
+    pk = pk(valid_idx);
+    
+    % Shift time to start at 0 for the new window
+    % This ensures your frame loop starts correctly at frame 1
+    tk = tk - t_start_process; 
+    
+    % Clear unused variables for memory
+    clearvars valid_idx;
 
-t_interval                  = 0.33;     % [s]
-t_total     = buf.t_total;
-frame_total = floor(t_total / t_interval);
+    % Set the time interval to accumulate over
+    t_interval                  = 0.33;     % [s]
+    t_total                     = max(tk);  % [s]
+    frame_total                 = floor(t_total/t_interval);
 
-%% Initialize General Parameters
-% GENERAL PARAMETERS
-% -------------------------------------------------------------------------
+else
+
+    % Create buffered event reader
+    buf = process.EventBuffer(fullfile(hdf5Path, fileName), ...
+        t_start_process, t_end_process);
+
+    % Set the time interval to accumulate over
+    t_interval                  = 0.33;     % [s]
+    t_total                     = buf.t_total;
+    frame_total                 = floor(t_total / t_interval);
+
+end
+
 % Set the image size
 imgSz                       = [640, 480]; 
-
-% Set the time interval to accumulate over
-% t_interval                  = 0.33;     % [s]
-% t_total                     = max(tk);  % [s]
-% frame_total                 = floor(t_total/t_interval);
 
 %% Initialize Filter Parameters
 
@@ -341,10 +351,16 @@ stcc_n_total_store          = zeros(1, frame_total);
 % Tuning Guide:
 
 coh_params.iei_alpha        = 0.8; 
-coh_params.r_s              = 30/imgSz(1);
+coh_params.r_s              = 50/imgSz(1);
 filter_mask                 = ones(imgSz);
 iei_map                     = zeros(imgSz);
 coh_logs.filter_threshold   = zeros(frame_total, 1);
+
+th_lo_ema   = NaN;   % initialized on first valid frame
+th_lo_sigma = NaN;   % running deviation estimate
+beta_th     = 0.15;  % threshold smoothing rate (your threshold_smoothing param)
+beta_sigma  = 0.1;   % deviation estimate smoothing rate
+k_gate      = 3.0;   % spike rejection width in sigma units
 
 %% Initialize Accumulator Parameters
 
@@ -639,9 +655,12 @@ atsOut = true;
 
 %% Initialize data storage and perform data optimizations
 % Identify number of events
-% current_idx     = 1;
-% n_events        = length(tk);
-frame_time      = zeros(frame_total, 1);
+current_idx     = 1;
+
+if useBuffer == false
+    n_events        = length(tk);
+    frame_time      = zeros(frame_total, 1);
+end
 
 % Initialize per-pixel timestamp tracking
 last_event_timestamp    = zeros(imgSz);
@@ -682,10 +701,13 @@ for frameIndex = 1:frame_total
     t_range_c = (frameIndex - 1) * t_interval;
     t_range_n = (t_range_c+t_interval);
 
-    % % Slice the events to a valid range
-    % [current_idx, x_valid, y_valid, t_valid, p_valid] = ...
-    % process.sliceToValidRange(t_range_n, xk, yk, tk, pk, imgSz, current_idx);
-    [x_valid, y_valid, t_valid, p_valid] = buf.nextWindow(t_range_n, imgSz);
+    % Slice the events to a valid range
+    if useBuffer == false
+        [current_idx, x_valid, y_valid, t_valid, p_valid] = ...
+        process.sliceToValidRange(t_range_n, xk, yk, tk, pk, imgSz, current_idx);
+    else
+        [x_valid, y_valid, t_valid, p_valid] = buf.nextWindow(t_range_n, imgSz);
+    end
 
     % Confirm the presence of valid events in the packet
     % If no events are present, we skip this frame
@@ -847,26 +869,50 @@ for frameIndex = 1:frame_total
 
         % --------------------- COHERENCE FILTER -------------------------%
         % ----------------------------------------------------------------%
-
         [norm_trace_map, norm_similarity_map, norm_persist_map,...
             filtered_coherence_map] = filters.computeCoherenceMask(sorted_x,...
             sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
             group_ends, coh_params, frameIndex, norm_trace_map_prev, t_std_diff,...
-            t_mean_diff);
+            t_mean_diff, counts);
 
         % Set any retention variables
         norm_trace_map_prev = norm_trace_map;
-
+        
         % Create the filter
         filter_mask = filtered_coherence_map;
         filter_mask(isnan(filter_mask)) = 0;
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
 
         % Use the Kneedle algorithm to find a suitable threshold
-        [th_lo, diag] = stats.findElbowThreshold(filter_mask);
+        [th_lo_raw, diag] = stats.findElbowThreshold(filter_mask);
 
-        % Use the threshold on the mask & log the result
+        % --- EMA with spike gating ---
+        if isnan(th_lo_ema)
+            % First valid frame: seed the estimator
+            th_lo_ema   = th_lo_raw;
+            th_lo_sigma = 0;
+            th_lo       = th_lo_raw;
+        else
+            residual = th_lo_raw - th_lo_ema;
+        
+            % Update running deviation estimate
+            th_lo_sigma = beta_sigma * abs(residual) + ...
+                          (1 - beta_sigma) * th_lo_sigma;
+        
+            % Clamp if spike exceeds gate
+            if th_lo_sigma > 0 && abs(residual) > k_gate * th_lo_sigma
+                th_lo_raw = th_lo_ema + k_gate * th_lo_sigma * sign(residual);
+            end
+        
+            % EMA update
+            th_lo_ema = beta_th * th_lo_raw + (1 - beta_th) * th_lo_ema;
+            th_lo     = th_lo_ema;
+        end
+
+        % % Use the threshold on the mask & log the result
         filter_mask(filter_mask < th_lo) = 0;
+        last_pass = bwareaopen(filter_mask,100);
+        filter_mask = filter_mask.*last_pass.*1.0;
         coh_logs.filter_threshold(frameIndex) = th_lo;
 
         % Compute event-level pass/total counts for the COH filter.
@@ -1016,7 +1062,7 @@ for frameIndex = 1:frame_total
 
             % Coherence requires a special calculation due to the Gaussian
             % blur applied
-            temporary_filter_mask = recovered_events.*filtered_coherence_map;
+            temporary_filter_mask = recovered_events.*counts;
             metrics_background_map = (temporary_filter_mask>0).*1.0;
             metrics_foreground_map = (filter_mask>0).*1.0;
         case 'MCF'

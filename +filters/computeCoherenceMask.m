@@ -2,7 +2,7 @@ function [norm_trace_map, norm_similarity_map, ...
     norm_persist_map, norm_coherence_map] = ...
     computeCoherenceMask(sorted_x, sorted_y, sorted_t, imgSz, ...
     t_interval, unique_idx, pos, group_ends, coh_params, ...
-    frameIndex, norm_trace_map_prev, std_map, mean_map)
+    frameIndex, norm_trace_map_prev, std_map, mean_map, counts)
 % COMPUTECOHERENCEMASK  Three-rule coherence filtering pipeline.
 %
 %   [NORM_TRACE_MAP, NORM_SIMILARITY_MAP, NORM_PERSIST_MAP,
@@ -70,8 +70,7 @@ function [norm_trace_map, norm_similarity_map, ...
     % ----------------------------------------------------------------
     % sum_exp_dist_map = zeros(imgSz);
     % 
-    % % % KD-tree radius search in normalized (x, y, t) space
-    % % % tic;
+    % % KD-tree radius search in normalized (x, y, t) space
     % [~, distances_db] = filters.findSpatialNeighbours(...
     %     sorted_x, sorted_y, sorted_t, r_s, imgSz, t_interval);
     % 
@@ -84,8 +83,7 @@ function [norm_trace_map, norm_similarity_map, ...
     %     idx = unique_idx(k);
     %     sum_exp_dist_map(idx) = max(val_chunk_exp);
     % end
-    % % % toc;
-    
+
     % Temporal binning at pixel-equivalent resolution
     Nt = max(round(t_interval / (r_s * t_interval)), 1);
     tb = min(floor(Nt * (sorted_t - min(sorted_t)) / t_interval) + 1, Nt);
@@ -142,8 +140,11 @@ function [norm_trace_map, norm_similarity_map, ...
         if ~isempty(validIdx)
             persist_map(validIdx) = minDists;
         end
-    end
 
+        % Calculate the exponential decayed persistance to "invert" the meaning
+        persist_map = exp(-persist_map / median(persist_map(persist_map > 0))).*(counts>0);
+    end
+    
     % Log-normalize the persistence map
     log_persist_map = log1p(persist_map);
     norm_persist_map = log_persist_map ./ max(log_persist_map(:));
@@ -151,6 +152,14 @@ function [norm_trace_map, norm_similarity_map, ...
     % ----------------------------------------------------------------
     % 4. Combine rule maps
     % ----------------------------------------------------------------
+    % [th_lo_trace, ~] = stats.findElbowThreshold(norm_trace_map,500);
+    % [th_lo_persist, ~] = stats.findElbowThreshold(norm_persist_map,500);
+    % [th_lo_sim, ~] = stats.findElbowThreshold(norm_similarity_map,500);
+    % 
+    % norm_trace_map(norm_trace_map < th_lo_trace) = 0;
+    % norm_persist_map(norm_persist_map < th_lo_persist) = 0;
+    % norm_similarity_map(norm_similarity_map < th_lo_sim) = 0;
+
     filtered_coherence_map = norm_trace_map ...
         + norm_persist_map + norm_similarity_map;
 
