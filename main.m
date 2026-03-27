@@ -38,7 +38,7 @@ end
 
 %% Define processing range
 % Define start and end time to process [seconds]
-t_start_process = 0; 
+t_start_process = 80; 
 t_end_process   = 1000; 
 
 %% Import events for inspection
@@ -48,8 +48,8 @@ hdf5Path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
     '/Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5/'];
 
 % Set dataset name
-fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-%fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+%fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
+fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
 %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
 %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
 
@@ -89,7 +89,7 @@ if useBuffer == false
     clearvars valid_idx;
 
     % Set the time interval to accumulate over
-    t_interval                  = 0.33;     % [s]
+    t_interval                  = 0.033;     % [s]
     t_total                     = max(tk);  % [s]
     frame_total                 = floor(t_total/t_interval);
 
@@ -100,7 +100,7 @@ else
         t_start_process, t_end_process);
 
     % Set the time interval to accumulate over
-    t_interval                  = 0.33;     % [s]
+    t_interval                  = 0.033;     % [s]
     t_total                     = buf.t_total;
     frame_total                 = floor(t_total / t_interval);
 
@@ -358,7 +358,7 @@ coh_logs.filter_threshold   = zeros(frame_total, 1);
 
 th_lo_ema   = NaN;   % initialized on first valid frame
 th_lo_sigma = NaN;   % running deviation estimate
-beta_th     = 0.15;  % threshold smoothing rate (your threshold_smoothing param)
+beta_th     = 0.15;  % threshold smoothing rate 
 beta_sigma  = 0.1;   % deviation estimate smoothing rate
 k_gate      = 3.0;   % spike rejection width in sigma units
 
@@ -909,7 +909,7 @@ for frameIndex = 1:frame_total
             th_lo     = th_lo_ema;
         end
 
-        % % Use the threshold on the mask & log the result
+        % Use the threshold on the mask & log the result
         filter_mask(filter_mask < th_lo) = 0;
         last_pass = bwareaopen(filter_mask,100);
         filter_mask = filter_mask.*last_pass.*1.0;
