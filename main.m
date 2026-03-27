@@ -1,7 +1,7 @@
 %% Loop control
 % Set this to "true" to run this code in a loop across all available
 % filters
-isLooping = false;
+isLooping = true;
 
 % If-else logic for the loop
 if isLooping == false
@@ -12,7 +12,7 @@ if isLooping == false
     close all;
 
     % Use buffered data
-    useBuffer = false;
+    useBuffer = true;
     
     % Select algorithms for filtering and accumulation
     % Set 'None' for filter selection to skip filtering entirely
@@ -28,17 +28,13 @@ if isLooping == false
 else
 
     % Use buffered data
-    useBuffer = false;
-
-    % Set accumulator
-    % Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
-    accumulatorSelection = 'IEI-ATS';
+    useBuffer = true;
 
 end
 
 %% Define processing range
 % Define start and end time to process [seconds]
-t_start_process = 80; 
+t_start_process = 0; 
 t_end_process   = 1000; 
 
 %% Import events for inspection
@@ -89,7 +85,7 @@ if useBuffer == false
     clearvars valid_idx;
 
     % Set the time interval to accumulate over
-    t_interval                  = 0.033;     % [s]
+    t_interval                  = 0.33;     % [s]
     t_total                     = max(tk);  % [s]
     frame_total                 = floor(t_total/t_interval);
 
@@ -100,7 +96,7 @@ else
         t_start_process, t_end_process);
 
     % Set the time interval to accumulate over
-    t_interval                  = 0.033;     % [s]
+    t_interval                  = 0.33;     % [s]
     t_total                     = buf.t_total;
     frame_total                 = floor(t_total / t_interval);
 
@@ -674,7 +670,7 @@ frame_metrics(1:frame_total) = struct( ...
     'ComputeTimeAccumulator', NaN, ...
     'EventsInFrame',...
     NaN, 'FilteredEvents', NaN, ...
-    'FilteringMEVs', NaN, 'AccumulatorMEVs', NaN);
+    'FilteringMEVs', NaN, 'AccumulatorMEVs', NaN, 'FilterThreshold', NaN);
 
 % Track the previous frame's output for temporal SSIM computation.
 % This is separate from time_surface_map_prev (which is the raw
@@ -1098,6 +1094,8 @@ for frameIndex = 1:frame_total
         metrics_n_total/filtering_stop;
     frame_metrics(frameIndex).AccumulatorMEVs = ...
         metrics_n_total/accumulator_stop;
+    frame_metrics(frameIndex).FilterThreshold = ...
+        coh_logs.filter_threshold(frameIndex);
     
     % Update the previous frame reference for next iteration
     prev_output_for_metrics = normalized_output_frame;
