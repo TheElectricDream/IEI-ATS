@@ -40,8 +40,8 @@ function fig = plotSelectedMetric(loopLog, filterNames, metricName, varargin)
     addRequired(p, 'filterNames', @iscell);
     addRequired(p, 'metricName',  @ischar);
     addParameter(p, 'Title',       '', @ischar);
-    addParameter(p, 'LineWidth',   1.5, @isnumeric);
-    addParameter(p, 'FigPosition', [655         258        1355         851], ...
+    addParameter(p, 'LineWidth',   2.0, @isnumeric);
+    addParameter(p, 'FigPosition', [1669         536         749         642], ...
         @(x) isnumeric(x) && numel(x) == 4);
     parse(p, loopLog, filterNames, metricName, varargin{:});
 
@@ -75,11 +75,13 @@ function fig = plotSelectedMetric(loopLog, filterNames, metricName, varargin)
 
     xlabel('Frame Index');
     ylabel(y_label);
-    title(plot_title);
+    %title(plot_title);
     legend('Location', 'best');
     grid on;
-    set(gca, 'FontSize', 16);
+    set(gca, 'FontSize', 16, 'FontName', 'Times New Roman');
+    set(fig, 'DefaultTextFontName', 'Times New Roman', 'DefaultAxesFontName', 'Times New Roman');
     hold off;
+    exportgraphics(fig, [plot_title '.pdf']);
 
 end
 
@@ -95,14 +97,15 @@ function [y_label, display_name] = metricLabel(name)
     lookup = { ...
         % field name                    y-axis label                        display name
         'SRR',                          'Signal Retention Rate',            'Signal Retention Rate (SRR)'; 
-        'ClarkEvansRemaining',                   'Clark-Evans (Background)',                      'Clark Evans';
-        'ClarkEvansRemoved',                   'Clark-Evans (Foreground)',                      'Clark Evans';
-        'ComputeTimeFilter',            'Compute Time (s)',                 'Compute Time (Filter)';
-        'ComputeTimeAccumulator',       'Compute Time (s)',                 'Compute Time (Accumulator)';
+        'ClarkEvansRemaining',          'Clark-Evans (Background)',         'Clark Evans (Removed)';
+        'ClarkEvansRemoved',            'Clark-Evans (Foreground)',         'Clark Evans (Remaining)';
+        'ComputeTimeFilter',            'Compute Time [s]',                 'Compute Time (Filter)';
+        'ComputeTimeAccumulator',       'Compute Time [s]',                 'Compute Time (Accumulator)';
         'EventsInFrame',                'Event Count',                      'Total Events per Frame';
         'FilteredEvents',               'Filtered Event Count',             'Total Filtered Events per Frame';
         'FilteringMEVs',                'MEVs / s',                         'Filtering MEVs (events per second)';
         'AccumulatorMEVs',              'MEVs / s',                         'Accumulator MEVs (events per second)';
+        'FilterThreshold',              'Filter Threshold',                 'Adaptive Filtering Threshold';
     };
 
     idx = find(strcmp(lookup(:,1), name), 1);

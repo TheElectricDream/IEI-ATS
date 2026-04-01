@@ -19,11 +19,11 @@ if isLooping == false
     
     % Set filtering
     % Options: 'NONE', 'STC', 'BAF', 'EDF', 'STCC', 'MCF', 'COH'
-    filterSelection = 'COH';
+    filterSelection = 'EDF';
     
     % Set accumulator
     % Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
-    accumulatorSelection = 'IEI-ATS';
+    accumulatorSelection = 'HOTS';
 
     % Set dataset name
     %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
@@ -96,7 +96,9 @@ if useBuffer == false
     clearvars valid_idx;
 
     % Set the time interval to accumulate over
+    t_interval                  = 0.033;     % [s]
     t_total                     = max(tk);  % [s]
+    frame_total                 = floor(t_total/t_interval);
 
 else
 
@@ -104,14 +106,12 @@ else
     buf = process.EventBuffer(fullfile(hdf5Path, fileName), ...
         t_start_process, t_end_process);
 
+    % Set the time interval to accumulate over
+    t_interval                  = 0.33;     % [s]
     t_total                     = buf.t_total;
+    frame_total                 = floor(t_total / t_interval);
 
 end
-
-
-% Set the time interval to accumulate over
-t_interval                  = 0.15;     % [s]
-frame_total                 = floor(t_total / t_interval);
 
 % Set the image size
 imgSz                       = [640, 480]; 
@@ -751,6 +751,10 @@ for frameIndex = 1:frame_total
     sorted_y = y_valid(sort_order);
     sorted_p = p_valid(sort_order);
 
+    % Ensure polarity is -1 and 1 (if it's 0 and 1)
+    p_signed = double(sorted_p);
+    p_signed(p_signed == 0) = -1;
+
     % Reset the frames for the current loop
     counts = zeros(imgSz);
     
@@ -953,18 +957,17 @@ for frameIndex = 1:frame_total
 
     % Any events which fall within the filter mask should not be included
     % in the accumulation
-    event_linear_idx = sub2ind(imgSz, sorted_x, sorted_y);
-    keep = filter_mask(event_linear_idx) > 0;
-    
-    % Apply to all event vectors simultaneously
-    filtered_x = sorted_x(keep);
-    filtered_y = sorted_y(keep);
-    filtered_t = sorted_t(keep);
-    filtered_p = sorted_p(keep);
+    % final_lin = sub2ind(imgSz, sorted_x, sorted_y);
+    % filter_mask(final_lin) = 1;
 
-    % Ensure polarity is -1 and 1 (if it's 0 and 1)
-    p_signed = double(filtered_p);
-    p_signed(p_signed == 0) = -1;
+    % Find linear indices of ones (compatible with ind2sub)
+    idx = find(filter_mask);
+    
+    % Example: convert linear indices to subscripts (row, col)
+    [sorted_x, sorted_y] = ind2sub(size(filter_mask), idx);
+
+    %final_lin = sub2ind(imgSz, sorted_x, sorted_y);
+
 
     if strcmp(accumulatorSelection, 'IEI-ATS') == 1
 
@@ -973,7 +976,7 @@ for frameIndex = 1:frame_total
 
         % Accumulate polarity into a 2D grid
         % If multiple events land on one pixel, we sum their polarities 
-        polarity_map = accumarray([filtered_x, filtered_y], p_signed, imgSz, @sum, 0);
+        polarity_map = accumarray([sorted_x, sorted_y], p_signed, imgSz, @sum, 0);
     
         [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
         accumulator.localAdaptiveTimeSurface(iei_map,...
@@ -997,7 +1000,7 @@ for frameIndex = 1:frame_total
     
         % Run the AGD algorithm
         [agd_surface, agd_state, ~] = accumulator.adaptiveGlobalDecay(agd_surface,...
-            filtered_x, filtered_y, filtered_t, agd_state, agd_params);
+            sorted_x, sorted_y, sorted_t, agd_state, agd_params);
 
         normalized_output_frame = agd_surface;
         agd_activity_store(frameIndex) = agd_state.activity;
@@ -1008,7 +1011,7 @@ for frameIndex = 1:frame_total
         % ----------------------------------------------------------------%
         
         [ts_t_map, normalized_output_frame] = accumulator.timeSurface(ts_t_map,...
-         filtered_x, filtered_y, filtered_t, imgSz, ts_time_constant);
+         sorted_x, sorted_y, sorted_t, imgSz, ts_time_constant);
 
     elseif strcmp(accumulatorSelection, 'SITS') == 1
 
@@ -1016,8 +1019,8 @@ for frameIndex = 1:frame_total
         % ----------------------------------------------------------------%
         
         [sits_t_map, normalized_output_frame] = ...
-            accumulator.speedInvariantTimeSurface(sits_t_map, filtered_x,...
-            filtered_y, sits_R);
+            accumulator.speedInvariantTimeSurface(sits_t_map, sorted_x,...
+            sorted_y, sits_R);
 
     elseif strcmp(accumulatorSelection, 'METS') == 1
 
@@ -1026,7 +1029,7 @@ for frameIndex = 1:frame_total
 
         [mets_surface, mets_state, normalized_output_frame] = ...
             accumulator.motionEncodedTimeSurface(...
-            filtered_x, filtered_y, filtered_t, p_signed, ...
+            sorted_x, sorted_y, sorted_t, p_signed, ...
             imgSz, mets_state, mets_params);
 
     elseif strcmp(accumulatorSelection, 'EVO-ATS') == 1
@@ -1036,7 +1039,7 @@ for frameIndex = 1:frame_total
     
         [zhu_surface, zhu_state, normalized_output_frame, zhu_tau_map] = ...
             accumulator.adaptiveTimeSurfaceZhu(...
-            filtered_x, filtered_y, filtered_t, p_signed, ...
+            sorted_x, sorted_y, sorted_t, p_signed, ...
             imgSz, zhu_state, zhu_params);
 
     else
