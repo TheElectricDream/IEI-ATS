@@ -1,7 +1,7 @@
 %% Loop control
 % Set this to "true" to run this code in a loop across all available
 % filters
-isLooping = true;
+isLooping = false;
 
 % If-else logic for the loop
 if isLooping == false
@@ -12,18 +12,26 @@ if isLooping == false
     close all;
 
     % Use buffered data
-    useBuffer = true;
+    useBuffer = false;
     
     % Select algorithms for filtering and accumulation
     % Set 'None' for filter selection to skip filtering entirely
     
     % Set filtering
     % Options: 'NONE', 'STC', 'BAF', 'EDF', 'STCC', 'MCF', 'COH'
-    filterSelection = 'COH';
+    filterSelection = 'NONE';
     
     % Set accumulator
     % Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
     accumulatorSelection = 'IEI-ATS';
+
+    % Set dataset name
+    %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
+    %fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+    %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
+    %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
+    %fileName = 'ZED-ROT-NOM.h5';
+    fileName = 'ZED-ROT-NOM-SLOWMO.h5';
 
 else
 
@@ -43,12 +51,6 @@ t_end_process   = 1000;
 hdf5Path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
     '/Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5/'];
 
-% Set dataset name
-%fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
-%fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
-%fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
-
 % Set output video name
 videoOutPath = fullfile('/home/alexandercrain/Videos/Research', ...
     sprintf('Normalized-Output-Fltr-%s-Acmtr-%s-%s.avi', ...
@@ -56,14 +58,23 @@ videoOutPath = fullfile('/home/alexandercrain/Videos/Research', ...
 
 if useBuffer == false
 
-    % Load the data
-    tk = double(h5read([hdf5Path fileName], '/timestamp'));
-    xk = single(h5read([hdf5Path fileName], '/x'));
-    yk = single(h5read([hdf5Path fileName], '/y'));
-    pk = single(h5read([hdf5Path fileName], '/polarity'));
-    
+    % Load the data (actual event data)
+    % tk = double(h5read([hdf5Path fileName], '/t'));
+    % xk = single(h5read([hdf5Path fileName], '/x'));
+    % yk = single(h5read([hdf5Path fileName], '/y'));
+    % pk = single(h5read([hdf5Path fileName], '/p'));
+
+    % Load the data (v2e simulated data)
+    data = h5read([hdf5Path fileName], '/events');
+
+    % data is [4 x N] in MATLAB (HDF5 transposes row/column order)
+    tk  = double(data(1, :))';   % timestamp [s]
+    xk  = single(data(2, :))';   % x
+    yk  = single(data(3, :))';   % y
+    pk  = single(data(4, :))';   % polarity (0 or 1)
+
     % Convert time to seconds
-    tk = (tk - tk(1))/1e6;
+    tk = (tk - tk(1))./1e6;
     
     % Convert to single data type to use less memory
     tk = single(tk);
@@ -85,7 +96,7 @@ if useBuffer == false
     clearvars valid_idx;
 
     % Set the time interval to accumulate over
-    t_interval                  = 0.33;     % [s]
+    t_interval                  = 0.033;     % [s]
     t_total                     = max(tk);  % [s]
     frame_total                 = floor(t_total/t_interval);
 
