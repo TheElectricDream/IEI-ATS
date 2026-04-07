@@ -1,7 +1,7 @@
 %% Loop control
 % Set this to "true" to run this code in a loop across all available
 % filters
-isLooping = false;
+isLooping = true;
 
 % If-else logic for the loop
 if isLooping == false
@@ -12,14 +12,14 @@ if isLooping == false
     close all;
 
     % Use buffered data
-    useBuffer = true;
+    useBuffer = false;
     
     % Select algorithms for filtering and accumulation
     % Set 'None' for filter selection to skip filtering entirely
     
     % Set filtering
     % Options: 'NONE', 'STC', 'BAF', 'EDF', 'STCC', 'MCF', 'COH'
-    filterSelection = 'COH';
+    filterSelection = 'EDF';
     
     % Set accumulator
     % Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
@@ -27,8 +27,8 @@ if isLooping == false
 
     % Set dataset name
     %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-    fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
-    %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
+    %fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+    fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
     %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
     %fileName = 'ZED-ROT-NOM.h5';
     %fileName = 'ZED-ROT-NOM-SLOWMO.h5';
@@ -36,7 +36,7 @@ if isLooping == false
 else
 
     % Use buffered data
-    useBuffer = true;
+    useBuffer = false;
 
 end
 
@@ -59,10 +59,10 @@ videoOutPath = fullfile('/home/alexandercrain/Videos/Research', ...
 if useBuffer == false
 
     % Load the data (actual event data)
-    tk = double(h5read([hdf5Path fileName], '/t'));
+    tk = double(h5read([hdf5Path fileName], '/timestamp'));
     xk = single(h5read([hdf5Path fileName], '/x'));
     yk = single(h5read([hdf5Path fileName], '/y'));
-    pk = single(h5read([hdf5Path fileName], '/p'));
+    pk = single(h5read([hdf5Path fileName], '/polarity'));
 
     % % Load the data (v2e simulated data)
     % data = h5read([hdf5Path fileName], '/events');
@@ -110,7 +110,7 @@ end
 
 
 % Set the time interval to accumulate over
-t_interval                  = 0.15;     % [s]
+t_interval                  = 0.33;     % [s]
 frame_total                 = floor(t_total / t_interval);
 
 % Set the image size
@@ -343,10 +343,10 @@ edf_n_total_store           = zeros(1, frame_total);
 %   the content-correlation mechanism adjusts TH at run-time, so this
 %   value serves as the initial operating point for that adaptation.
 
-stcc_params.N               = 500;      
-stcc_params.sigma_d         = 8;       
-stcc_params.sigma_t         = 10e-3;   
-stcc_params.sigma_p         = 1;        
+stcc_params.N               = 100;      
+stcc_params.sigma_d         = 6;       
+stcc_params.sigma_t         = 10e-1;   
+stcc_params.sigma_p         = 5;        
 stcc_params.TH              = 0.1;     
 stcc_n_passed_store         = zeros(1, frame_total);
 stcc_n_total_store          = zeros(1, frame_total);
@@ -361,13 +361,6 @@ coh_params.iei_alpha        = 0.8;
 coh_params.r_s              = 50/imgSz(1);
 filter_mask                 = ones(imgSz);
 iei_map                     = zeros(imgSz);
-coh_logs.filter_threshold   = zeros(frame_total, 1);
-
-th_lo_ema   = NaN;   % initialized on first valid frame
-th_lo_sigma = NaN;   % running deviation estimate
-beta_th     = 0.15;  % threshold smoothing rate 
-beta_sigma  = 0.1;   % deviation estimate smoothing rate
-k_gate      = 3.0;   % spike rejection width in sigma units
 
 %% Initialize Accumulator Parameters
 
@@ -675,13 +668,17 @@ norm_trace_map_prev     = zeros(imgSz);
 time_surface_map_prev   = zeros(imgSz);
 
 % Pre-allocate metrics storage.
-frame_metrics(1:frame_total) = struct( ...
-    'SRR', NaN, 'ClarkEvansRemoved', NaN, 'ClarkEvansRemaining', NaN, ...
-    'ComputeTimeFilter', NaN, ...
-    'ComputeTimeAccumulator', NaN, ...
-    'EventsInFrame',...
-    NaN, 'FilteredEvents', NaN, ...
-    'FilteringMEVs', NaN, 'AccumulatorMEVs', NaN, 'FilterThreshold', NaN);
+frame_metrics.SRR                  = zeros(1, frame_total);
+frame_metrics.ClarkEvansRemoved    = zeros(1, frame_total);
+frame_metrics.ClarkEvansRemaining  = zeros(1, frame_total);
+frame_metrics.ComputeTimeFilter    = zeros(1, frame_total);
+frame_metrics.ComputeTimeAccumulator = zeros(1, frame_total);
+frame_metrics.EventsInFrame        = zeros(1, frame_total);
+frame_metrics.FilteredEvents       = zeros(1, frame_total);
+frame_metrics.FilteringMEVs        = zeros(1, frame_total);
+frame_metrics.AccumulatorMEVs      = zeros(1, frame_total);
+
+elbowDiagnostics = {};
 
 % Track the previous frame's output for temporal SSIM computation.
 % This is separate from time_surface_map_prev (which is the raw
@@ -838,11 +835,6 @@ for frameIndex = 1:frame_total
         edf_n_passed_store(frameIndex) = edf_n_pass;
         edf_n_total_store(frameIndex)  = edf_n_tot;
 
-        % Extract the filtered events for accumulation
-        sorted_x = edf_eventBuffer.x;
-        sorted_y = edf_eventBuffer.y;
-        sorted_t = edf_eventBuffer.t;
-
     elseif strcmp(filterSelection, 'STCC') == 1
 
         % ------- STCC-FILTER (Space-Time-Content Correlation) -----------%
@@ -851,13 +843,14 @@ for frameIndex = 1:frame_total
         % Compute signed polarity for this filter
         p_signed_for_stcc = sorted_p * 2 - 1;
 
-        [filter_mask, stcc_n_pass, stcc_n_tot] = ...
+        [filter_mask, stcc_n_pass, stcc_n_tot, stcc_threshold] = ...
             filters.stccFilter(sorted_x, sorted_y, ...
             sorted_t, p_signed_for_stcc, imgSz, stcc_params);
 
         % Store metrics for post-processing analysis
         stcc_n_passed_store(frameIndex) = stcc_n_pass;
         stcc_n_total_store(frameIndex)  = stcc_n_tot;
+        frame_metrics.STCCThreshold(frameIndex) = stcc_threshold;
 
     elseif strcmp(filterSelection, 'MCF') == 1
  
@@ -892,36 +885,25 @@ for frameIndex = 1:frame_total
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
 
         % Use the Kneedle algorithm to find a suitable threshold
-        [th_lo_raw, diag] = stats.findElbowThreshold(filter_mask);
+        % Downsample filter_mask from 640x480 to 320x240 before thresholding
+        % Assume imgSz corresponds to original size; compute target size half in each dim
+        targetSz = ceil(imgSz / 2);
+        % Use imresize to downsample (preserve range); convert to single for processing
+        ds_mask = imresize(single(filter_mask), targetSz, 'bilinear');
+        [th_lo, diag] = stats.findElbowThreshold(ds_mask);
+        % [th_lo, diag] = stats.findElbowThreshold(norm_trace_map);
+        % norm_trace_map(norm_trace_map<th_lo)=0;
+        % [th_lo, diag] = stats.findElbowThreshold(norm_persist_map);
+        % norm_persist_map(norm_persist_map<th_lo)=0;
+        % [th_lo, diag] = stats.findElbowThreshold(norm_similarity_map);
+        % norm_similarity_map(norm_similarity_map<th_lo)=0;
 
-        % --- EMA with spike gating ---
-        if isnan(th_lo_ema)
-            % First valid frame: seed the estimator
-            th_lo_ema   = th_lo_raw;
-            th_lo_sigma = 0;
-            th_lo       = th_lo_raw;
-        else
-            residual = th_lo_raw - th_lo_ema;
-        
-            % Update running deviation estimate
-            th_lo_sigma = beta_sigma * abs(residual) + ...
-                          (1 - beta_sigma) * th_lo_sigma;
-        
-            % Clamp if spike exceeds gate
-            if th_lo_sigma > 0 && abs(residual) > k_gate * th_lo_sigma
-                th_lo_raw = th_lo_ema + k_gate * th_lo_sigma * sign(residual);
-            end
-        
-            % EMA update
-            th_lo_ema = beta_th * th_lo_raw + (1 - beta_th) * th_lo_ema;
-            th_lo     = th_lo_ema;
-        end
-
+        % filter_mask = norm_similarity_map + norm_persist_map;
+          
         % Use the threshold on the mask & log the result
         filter_mask(filter_mask < th_lo) = 0;
-        last_pass = bwareaopen(filter_mask,100);
-        filter_mask = filter_mask.*last_pass.*1.0;
-        coh_logs.filter_threshold(frameIndex) = th_lo;
+        % last_pass = bwareaopen(filter_mask,100);
+        % filter_mask = filter_mask.*last_pass.*1.0;
 
         % Compute event-level pass/total counts for the COH filter.
         % The other filters return these directly; COH needs them
@@ -929,6 +911,9 @@ for frameIndex = 1:frame_total
         coh_linear_idx = sub2ind(imgSz, sorted_x(:), sorted_y(:));
         coh_n_total  = numel(sorted_x);
         coh_n_passed = sum(filter_mask(coh_linear_idx) > 0);
+
+        frame_metrics.FilterThreshold(frameIndex) = th_lo;
+        elbowDiagnostics{frameIndex} = diag;
 
     elseif strcmp(filterSelection, 'NONE') == 1
 
@@ -1106,24 +1091,22 @@ for frameIndex = 1:frame_total
     end
     
     % Compute all per-frame metrics
-    frame_metrics(frameIndex).SRR = ...
+    frame_metrics.SRR(frameIndex) = ...
         metrics.computeSignalRetentionRate(metrics_n_passed, metrics_n_total);
-    frame_metrics(frameIndex).ClarkEvansRemoved = ...
+    frame_metrics.ClarkEvansRemoved(frameIndex) = ...
         metrics.computeClarkEvans(metrics_background_map);
-    frame_metrics(frameIndex).ClarkEvansRemaining = ...
+    frame_metrics.ClarkEvansRemaining(frameIndex) = ...
         metrics.computeClarkEvans(metrics_foreground_map);
-    frame_metrics(frameIndex).ComputeTimeFilter = filtering_stop;
-    frame_metrics(frameIndex).ComputeTimeAccumulator = accumulator_stop;
-    frame_metrics(frameIndex).EventsInFrame = metrics_n_total;
-    frame_metrics(frameIndex).FilteredEvents = ...
+    frame_metrics.ComputeTimeFilter(frameIndex) = filtering_stop;
+    frame_metrics.ComputeTimeAccumulator(frameIndex) = accumulator_stop;
+    frame_metrics.EventsInFrame(frameIndex) = metrics_n_total;
+    frame_metrics.FilteredEvents(frameIndex) = ...
         metrics_n_total-metrics_n_passed;
-    frame_metrics(frameIndex).FilteringMEVs = ...
+    frame_metrics.FilteringMEVs(frameIndex) = ...
         metrics_n_total/filtering_stop;
-    frame_metrics(frameIndex).AccumulatorMEVs = ...
+    frame_metrics.AccumulatorMEVs(frameIndex) = ...
         metrics_n_total/accumulator_stop;
-    frame_metrics(frameIndex).FilterThreshold = ...
-        coh_logs.filter_threshold(frameIndex);
-    
+
     % Update the previous frame reference for next iteration
     prev_output_for_metrics = normalized_output_frame;
 
@@ -1161,8 +1144,8 @@ for frameIndex = 1:frame_total
 
     % Print progress
     stats.printPercentComplete(frameIndex, frame_total, ...
-        frame_metrics(frameIndex).ComputeTimeFilter, ...
-        frame_metrics(frameIndex).ComputeTimeAccumulator);
+        frame_metrics.ComputeTimeFilter(frameIndex), ...
+        frame_metrics.ComputeTimeAccumulator(frameIndex));
 
 end
 

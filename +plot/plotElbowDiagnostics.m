@@ -59,7 +59,8 @@ function fig = plotElbowDiagnostics(auto_threshold, diagnostics, varargin)
         end
     end
 
-    fig = figure('Position', fig_pos);
+    fig = figure(5);
+    set(fig, 'Position', fig_pos);
 
     % === Row 1: Lower-bound elbow ====================================
     th_lo = auto_threshold(1);

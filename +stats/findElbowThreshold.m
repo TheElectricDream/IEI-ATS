@@ -190,6 +190,7 @@ function [threshold, diag_out] = run_elbow(score_map, N_th, win_hz)
     end
 
     th_vec = linspace(min(vals), max(vals), N_th);
+    %th_vec = linspace(min(vals), 0.2, N_th);
 
     % Box-filter kernel
     win_side = 2 * win_hz + 1;
@@ -199,9 +200,11 @@ function [threshold, diag_out] = run_elbow(score_map, N_th, win_hz)
     mean_lbv = zeros(1, N_th);
     for k = 1:N_th
         mask = double(score_map >= th_vec(k));
-        px   = conv2(mask, kernel, 'same');
+        px = imfilter(mask, kernel, 'replicate');
         lbv  = px .* (1 - px);
-        mean_lbv(k) = mean(lbv(:));
+        % mean_lbv(k) = mean(lbv(:));
+        mean_lbv(k) = mean(lbv(score_map > 0));
+        
     end
 
     % Store the full curve before any truncation
