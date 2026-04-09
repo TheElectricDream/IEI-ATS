@@ -1,7 +1,7 @@
 %% Loop control
 % Set this to "true" to run this code in a loop across all available
 % filters
-isLooping = true;
+isLooping = false;
 
 % If-else logic for the loop
 if isLooping == false
@@ -12,14 +12,14 @@ if isLooping == false
     close all;
 
     % Use buffered data
-    useBuffer = false;
+    useBuffer = true;
     
     % Select algorithms for filtering and accumulation
     % Set 'None' for filter selection to skip filtering entirely
     
     % Set filtering
     % Options: 'NONE', 'STC', 'BAF', 'EDF', 'STCC', 'MCF', 'COH'
-    filterSelection = 'EDF';
+    filterSelection = 'COH';
     
     % Set accumulator
     % Options: 'HOTS', 'SITS', 'METS', 'IEI-ATS', 'AGD', 'EVO-ATS'
@@ -307,7 +307,7 @@ edf_n_total_store           = zeros(1, frame_total);
 % REF: https://doi.org/10.1016/j.image.2024.117136
 % -------------------------------------------------------------------------
 % Tuning Guide:
-%   The STCC-Filter computes a probability-of-signal (POS) score for
+%   The Space–Time-Content Correlation computes a probability-of-signal for
 %   each incoming event by evaluating its spatiotemporal correlation
 %   with N neighbouring events. Events whose POS falls below the
 %   discrimination threshold TH are classified as noise and rejected.
@@ -913,7 +913,7 @@ for frameIndex = 1:frame_total
         coh_n_passed = sum(filter_mask(coh_linear_idx) > 0);
 
         frame_metrics.FilterThreshold(frameIndex) = th_lo;
-        elbowDiagnostics{frameIndex} = diag;
+        elbowDiagnostics{frameIndex} = diag; %#ok<SAGROW>
 
     elseif strcmp(filterSelection, 'NONE') == 1
 

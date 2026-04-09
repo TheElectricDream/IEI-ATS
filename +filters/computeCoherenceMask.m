@@ -3,13 +3,14 @@ function [norm_trace_map, norm_similarity_map, ...
     computeCoherenceMask(sorted_x, sorted_y, sorted_t, imgSz, ...
     t_interval, unique_idx, pos, group_ends, coh_params, ...
     frameIndex, norm_trace_map_prev, std_map, mean_map, counts)
+
 % COMPUTECOHERENCEMASK  Three-rule coherence filtering pipeline.
 %
 %   [NORM_TRACE_MAP, NORM_SIMILARITY_MAP, NORM_PERSIST_MAP,
-%   FILTERED_COHERENCE_MAP] = COMPUTECOHERENCEMASK(...) combines
-%   three independent coherence rules into a scalar per-pixel score
-%   that separates real edge events from noise before temporal
-%   surface accumulation.
+%   NORM_COHERENCE_MAP] = COMPUTECOHERENCEMASK(...) combines three
+%   independent coherence rules into a scalar per-pixel score that
+%   separates real edge events from noise before temporal surface
+%   accumulation.
 %
 %   Inputs:
 %     sorted_x, sorted_y  - [N x 1] Pixel coordinates (row, col),
@@ -22,33 +23,40 @@ function [norm_trace_map, norm_similarity_map, ...
 %                           sorted vectors.
 %     group_ends           - [K x 1] End of each pixel group.
 %     coh_params           - Struct with fields:
-%       .r_s                   - Spatial search radius (normalized)
+%       .r_s                   - Spatial search radius (normalized).
 %     frameIndex           - Current frame number (1-indexed). Rule 2
 %                           is skipped on the first frame.
 %     norm_trace_map_prev  - [imgSz] Previous frame's trace map for
 %                           persistence assessment (Rule 2).
-%     mean_std             - [imgSz] Per-pixel std IEI mapfor Rule 3.
-%     mean_map             - [imgSz] Per-pixel mean IEI map for Rule 3.
+%     std_map              - [imgSz] Per-pixel IEI standard deviation.
+%     mean_map             - [imgSz] Per-pixel IEI mean.
+%     counts               - [imgSz] Per-pixel event count map; used
+%                           to mask persistence scores to active pixels.
 %
 %   Outputs:
 %     norm_trace_map       - [imgSz] Rule 1: spatial density score.
 %     norm_similarity_map  - [imgSz] Rule 3: IEI regularity score.
 %     norm_persist_map     - [imgSz] Rule 2: temporal persistence.
-%     filtered_coherence_map - [imgSz] Combined score (sum of rules).
+%     norm_coherence_map   - [imgSz] Combined score (log-normalized
+%                           sum of the three rule maps).
 %
 %   Algorithm:
-%     1. Rule 1 — Spatial density: KD-tree radius search over
-%        normalized (x, y, t) space. Sum of distances within r_s
-%        forms a density proxy. Log-normalized to compress the
-%        heavy-tailed distribution.
+%     1. Rule 1 — Spatial density: events are binned into a 3D
+%        histogram (x, y, temporal-bin) at full spatial resolution.
+%        A distance-weighted convolution kernel of radius r_s
+%        computes local density. Per-event density is sampled from
+%        the volume and aggregated per-pixel via max. The result
+%        is log-normalized to compress the heavy-tailed distribution.
 %     2. Rule 3 — IEI regularity: local coefficient of variation
 %        (CV = sigma/mu) of the IEI map via normalized convolution.
-%        Scores above similarity_threshold are rejected.
+%        High-CV pixels indicate irregular firing and are penalized.
 %     3. Rule 2 — Temporal persistence: KNN search between the
 %        current and previous trace maps in normalized (row, col,
-%        value) space. Pixels without a close predecessor are
-%        rejected. Skipped on frame 1.
-%     4. Combine: sum of the three normalized rule maps.
+%        value) space. Close matches receive high scores via
+%        exponential decay of distance, masked to active pixels.
+%        Skipped on frame 1 (trace map used as proxy).
+%     4. Combine: elementwise sum of the three [0, 1] rule maps,
+%        followed by log1p normalization of the combined map.
 %
 %   Notes:
 %     - The three rules are independent and additive. Each produces
