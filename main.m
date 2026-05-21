@@ -27,8 +27,8 @@ if isLooping == false
 
     % Set dataset name
     %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-    %fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
-    fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
+    fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+    %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
     %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
     %fileName = 'ZED-ROT-NOM.h5';
     %fileName = 'ZED-ROT-NOM-SLOWMO.h5';

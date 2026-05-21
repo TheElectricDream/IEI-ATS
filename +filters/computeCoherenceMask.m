@@ -106,8 +106,8 @@ function [norm_trace_map, norm_similarity_map, ...
     [kx, ky, kt] = ndgrid(-kr_x:kr_x, -kr_y:kr_y, -kr_t:kr_t);
     
     % Normalize kernel indices back to the same units as the point cloud
-    K = sqrt((kx/imgSz(1)).^2 + (ky/imgSz(2)).^2 + (kt/Nt).^2);
-    K(K > r_s) = 0;
+    K_dist = sqrt((kx/imgSz(1)).^2 + (ky/imgSz(2)).^2 + (kt/Nt).^2);
+    K = double(K_dist <= r_s); % 1 inside the ball, 0 outside
     
     density = convn(V, K, 'same');
     
