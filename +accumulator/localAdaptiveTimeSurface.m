@@ -156,17 +156,7 @@ function [normalized_output_frame, time_surface_map_raw, ...
     time_surface_map(good_mask) = ...
         time_surface_map_raw(good_mask) ./ ...
         (sigma + counts_smooth(good_mask) .^ div_norm_exp);
-
-    % ----------------------------------------------------------------
-    % 7. Outlier rejection (iterative 2-pass sigma clipping)
-    % ----------------------------------------------------------------
-    for i = 1:10
-        [time_surface_map, time_surface_map_raw] = ...
-            stats.rejectPolarityOutliers(time_surface_map, time_surface_map_raw, 2);
-    end
-    % [time_surface_map, time_surface_map_raw] = ...
-    %     rejectPolarityOutliers(time_surface_map, time_surface_map_raw, 2);
-
+    
     % ----------------------------------------------------------------
     % 8. Tone mapping for display
     % ----------------------------------------------------------------

@@ -1,8 +1,8 @@
 function [norm_trace_map, norm_similarity_map, ...
-    norm_persist_map, norm_coherence_map] = ...
+    norm_persist_map, norm_coherence_map, hot_pixel_accumulator] = ...
     computeCoherenceMask(sorted_x, sorted_y, sorted_t, imgSz, ...
     t_interval, unique_idx, pos, group_ends, coh_params, ...
-    frameIndex, norm_trace_map_prev, std_map, mean_map, counts)
+    frameIndex, norm_trace_map_prev, std_map, mean_map, counts, hot_pixel_accumulator)
 
 % COMPUTECOHERENCEMASK  Three-rule coherence filtering pipeline.
 %
@@ -74,23 +74,61 @@ function [norm_trace_map, norm_similarity_map, ...
     r_s                   = coh_params.r_s;
 
     % ----------------------------------------------------------------
+    % 2. Rule 3 — IEI regularity (similarity map)
+    % ----------------------------------------------------------------
+    [~, ~, norm_similarity_map] = filters.findSimilarities(...
+        sorted_x, sorted_y, std_map, mean_map, imgSz);
+    norm_similarity_map(isnan(norm_similarity_map)) = 0;
+
+    % ----------------------------------------------------------------
+    % Bonus Rules: Hot Pixel Removal
+    % ----------------------------------------------------------------
+    % 1. Define the "Poisson Band" 
+    % A CV between 0.8 and 1.25 yields a regularity score between ~0.44 and ~0.55.
+    poisson_mask = (norm_similarity_map > 0.1) & (norm_similarity_map < 0.9);
+    
+    % 2. Isolate hyperactivity
+    % We only care about the event counts of pixels that lack temporal structure
+    poisson_counts = counts(poisson_mask);
+    
+    if ~isempty(poisson_counts) && length(poisson_counts) > 10
+        
+        % (Fallback alternative if elbow fails: robust statistics)
+        count_th = median(poisson_counts) + 5 * mad(poisson_counts, 1);
+        current_hot_mask = poisson_mask & (counts > count_th);
+
+    end
+        
+    % 2. Update the Leaky Bucket Memory
+    % Add current flags, then decay by 10% (multiply by 0.9). 
+    % A consistent hot pixel will accumulate up to ~10.0 over time.
+    hot_pixel_accumulator = (hot_pixel_accumulator + current_hot_mask) * 0.9;
+    
+    % 3. Define the Persistent Hot Mask
+    % If a pixel's accumulator is > 2.0, it has been flagged in at least 
+    % 3 recent frames. It is considered a confirmed hardware defect.
+    persistent_hot_mask = hot_pixel_accumulator > 2.0;
+    
+    % Combine current transients and historical defects
+    final_hot_mask = current_hot_mask | persistent_hot_mask;
+    
+    % 4. Strip the defective pixels globally
+    hot_pixel_idx = find(final_hot_mask);
+    
+    if ~isempty(hot_pixel_idx)
+        % Strip from the coordinate arrays
+        sorted_lin_idx = sub2ind(imgSz, sorted_x, sorted_y);
+        remove_mask = ismember(sorted_lin_idx, hot_pixel_idx);
+        
+        sorted_x(remove_mask) = [];
+        sorted_y(remove_mask) = [];
+        sorted_t(remove_mask) = [];
+        
+    end
+
+    % ----------------------------------------------------------------
     % 1. Rule 1 — Spatial density (trace map)
     % ----------------------------------------------------------------
-    % sum_exp_dist_map = zeros(imgSz);
-    % 
-    % % KD-tree radius search in normalized (x, y, t) space
-    % [~, distances_db] = filters.findSpatialNeighbours(...
-    %     sorted_x, sorted_y, sorted_t, r_s, imgSz, t_interval);
-    % 
-    % % Sum distances for each event
-    % sum_exp_event = cellfun(@sum, distances_db);
-    % 
-    % % Aggregate to pixel map (max over events at same pixel)
-    % for k = 1:length(unique_idx)
-    %     val_chunk_exp = sum_exp_event(pos(k):group_ends(k));
-    %     idx = unique_idx(k);
-    %     sum_exp_dist_map(idx) = max(val_chunk_exp);
-    % end
 
     % Temporal binning at pixel-equivalent resolution
     Nt = max(round(t_interval / (r_s * t_interval)), 1);
@@ -120,17 +158,6 @@ function [norm_trace_map, norm_similarity_map, ...
     log_trace_map = log1p(sum_exp_dist_map');
     norm_trace_map = log_trace_map' ./ max(log_trace_map(:));
 
-    % log_trace_map_trace_proxy = log1p(trace_proxy');
-    % norm_trace_map_trace_proxy = log_trace_map_trace_proxy' ./ max(log_trace_map_trace_proxy(:));
-
-
-    % ----------------------------------------------------------------
-    % 2. Rule 3 — IEI regularity (similarity map)
-    % ----------------------------------------------------------------
-    [~, ~, norm_similarity_map] = filters.findSimilarities(...
-        sorted_x, sorted_y, std_map, mean_map, imgSz);
-    norm_similarity_map(isnan(norm_similarity_map)) = 0;
-
     % ----------------------------------------------------------------
     % 3. Rule 2 — Temporal persistence
     % ----------------------------------------------------------------
@@ -156,6 +183,9 @@ function [norm_trace_map, norm_similarity_map, ...
     % Log-normalize the persistence map
     log_persist_map = log1p(persist_map);
     norm_persist_map = log_persist_map ./ max(log_persist_map(:));
+    temp = norm_persist_map;
+
+    norm_persist_map(norm_persist_map==1)=0;
 
     % ----------------------------------------------------------------
     % 4. Combine rule maps
@@ -169,9 +199,10 @@ function [norm_trace_map, norm_similarity_map, ...
     % norm_similarity_map(norm_similarity_map < th_lo_sim) = 0;
 
     filtered_coherence_map = norm_trace_map ...
-        + norm_persist_map + norm_similarity_map;
+        .* norm_persist_map;
 
     log_coherence_map = log1p(filtered_coherence_map);
     norm_coherence_map = log_coherence_map ./ max(log_coherence_map(:));
+
 
 end

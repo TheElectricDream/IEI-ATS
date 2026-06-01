@@ -98,7 +98,7 @@ function [similarity_score, cv_map, regularity_map] = findSimilarities(sorted_x,
     % ----------------------------------------------------------------
     % 5. Combined regularity map
     % ----------------------------------------------------------------
-    regularity_map = regularity_score .* magnitude_score;
+    regularity_map = regularity_score;
 
     % ----------------------------------------------------------------
     % 6. Look up per-event scores
@@ -107,3 +107,4 @@ function [similarity_score, cv_map, regularity_map] = findSimilarities(sorted_x,
     similarity_score = regularity_map(linear_idx);
 
 end
+

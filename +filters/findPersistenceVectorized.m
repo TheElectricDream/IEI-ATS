@@ -70,7 +70,7 @@ function [closestRows, closestCols, minDists, validIndicesA] = ...
     % ----------------------------------------------------------------
     % 2. Extract query points from mapA
     % ----------------------------------------------------------------
-    idxA = find(mapA > 0);
+    idxA = find(mapA > 1e-6);
 
     if isempty(idxA)
         closestRows = [];

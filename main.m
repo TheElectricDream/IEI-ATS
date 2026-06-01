@@ -666,6 +666,7 @@ end
 last_event_timestamp    = zeros(imgSz);
 norm_trace_map_prev     = zeros(imgSz);
 time_surface_map_prev   = zeros(imgSz);
+hot_pixel_accumulator   = zeros(imgSz);
 
 % Pre-allocate metrics storage.
 frame_metrics.SRR                  = zeros(1, frame_total);
@@ -782,8 +783,9 @@ for frameIndex = 1:frame_total
     % Update a persistant map of the inter-event interval so that sparse
     % data is retained
     new_obs_mask = (t_mean_diff > 0); 
-    iei_map(new_obs_mask) = (1 - coh_params.iei_alpha) .* iei_map(new_obs_mask) +...
-        coh_params.iei_alpha .* t_mean_diff(new_obs_mask);
+    % iei_map(new_obs_mask) = (1 - coh_params.iei_alpha) .* iei_map(new_obs_mask) +...
+    %     coh_params.iei_alpha .* t_mean_diff(new_obs_mask);
+    iei_map = t_mean_diff;
 
     % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
     % =========================== FILTERING ==============================%
@@ -871,10 +873,15 @@ for frameIndex = 1:frame_total
         % --------------------- COHERENCE FILTER -------------------------%
         % ----------------------------------------------------------------%
         [norm_trace_map, norm_similarity_map, norm_persist_map,...
-            filtered_coherence_map] = filters.computeCoherenceMask(sorted_x,...
+            filtered_coherence_map, hot_pixel_accumulator] = filters.computeCoherenceMask(sorted_x,...
             sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
             group_ends, coh_params, frameIndex, norm_trace_map_prev, t_std_diff,...
-            t_mean_diff, counts);
+            t_mean_diff, counts, hot_pixel_accumulator);
+        
+        secondary_hot_mask = norm_persist_map == 1;
+    
+        % 4. Strip the defective pixels globally
+        secondary_hot_pixel_idx = find(secondary_hot_mask);
 
         % Set any retention variables
         norm_trace_map_prev = norm_trace_map;
@@ -883,7 +890,7 @@ for frameIndex = 1:frame_total
         filter_mask = filtered_coherence_map;
         filter_mask(isnan(filter_mask)) = 0;
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
-
+        
         % Use the Kneedle algorithm to find a suitable threshold
         % Downsample filter_mask from 640x480 to 320x240 before thresholding
         % Assume imgSz corresponds to original size; compute target size half in each dim
@@ -891,19 +898,9 @@ for frameIndex = 1:frame_total
         % Use imresize to downsample (preserve range); convert to single for processing
         ds_mask = imresize(single(filter_mask), targetSz, 'bilinear');
         [th_lo, diag] = stats.findElbowThreshold(ds_mask);
-        % [th_lo, diag] = stats.findElbowThreshold(norm_trace_map);
-        % norm_trace_map(norm_trace_map<th_lo)=0;
-        % [th_lo, diag] = stats.findElbowThreshold(norm_persist_map);
-        % norm_persist_map(norm_persist_map<th_lo)=0;
-        % [th_lo, diag] = stats.findElbowThreshold(norm_similarity_map);
-        % norm_similarity_map(norm_similarity_map<th_lo)=0;
 
-        % filter_mask = norm_similarity_map + norm_persist_map;
-          
         % Use the threshold on the mask & log the result
-        filter_mask(filter_mask < th_lo) = 0;
-        % last_pass = bwareaopen(filter_mask,100);
-        % filter_mask = filter_mask.*last_pass.*1.0;
+        % filter_mask(filter_mask < th_lo) = 0;
 
         % Compute event-level pass/total counts for the COH filter.
         % The other filters return these directly; COH needs them
@@ -911,6 +908,9 @@ for frameIndex = 1:frame_total
         coh_linear_idx = sub2ind(imgSz, sorted_x(:), sorted_y(:));
         coh_n_total  = numel(sorted_x);
         coh_n_passed = sum(filter_mask(coh_linear_idx) > 0);
+
+        % Grab the indices of the filtered mask
+        filter_mask_idx = find(filter_mask>0);
 
         frame_metrics.FilterThreshold(frameIndex) = th_lo;
         elbowDiagnostics{frameIndex} = diag; %#ok<SAGROW>
@@ -936,16 +936,54 @@ for frameIndex = 1:frame_total
         fprintf(['ACCUMULATOR SELECTION: ' accumulatorSelection '\n']);
     end
 
+    filtered_x = sorted_x;
+    filtered_y = sorted_y;
+    filtered_t = sorted_t;
+    filtered_p = sorted_p;
+    
+    if strcmp(filterSelection, 'COH') == 1
+        % Remove the HOT PIXELS identified using IEI
+        norm_hot_pixel = log1p(hot_pixel_accumulator) ./ max(log1p(hot_pixel_accumulator));
+        persistent_hot_mask = norm_hot_pixel == 1.0;
+               
+        % 4. Strip the defective pixels globally
+        hot_pixel_idx = find(persistent_hot_mask);
+        
+        if ~isempty(hot_pixel_idx)
+            % Strip from the coordinate arrays
+            sorted_lin_idx = sub2ind(imgSz, filtered_x, filtered_y);
+            remove_mask = ismember(sorted_lin_idx, hot_pixel_idx);
+            
+            filtered_x(remove_mask) = [];
+            filtered_y(remove_mask) = [];
+            filtered_t(remove_mask) = [];
+            filtered_p(remove_mask) = [];
+            
+        end
+
+        if ~isempty(secondary_hot_pixel_idx)
+            % Strip from the coordinate arrays
+            sorted_lin_idx = sub2ind(imgSz, filtered_x, filtered_y);
+            remove_mask = ismember(sorted_lin_idx, secondary_hot_pixel_idx);
+            
+            filtered_x(remove_mask) = [];
+            filtered_y(remove_mask) = [];
+            filtered_t(remove_mask) = [];
+            filtered_p(remove_mask) = [];
+            
+        end
+    end
+
     % Any events which fall within the filter mask should not be included
     % in the accumulation
-    event_linear_idx = sub2ind(imgSz, sorted_x, sorted_y);
-    keep = filter_mask(event_linear_idx) > 0;
-    
+    event_linear_idx = sub2ind(imgSz, filtered_x, filtered_y);
+    remove_mask = filter_mask(event_linear_idx) == 0;
+
     % Apply to all event vectors simultaneously
-    filtered_x = sorted_x(keep);
-    filtered_y = sorted_y(keep);
-    filtered_t = sorted_t(keep);
-    filtered_p = sorted_p(keep);
+    filtered_x(remove_mask) = [];
+    filtered_y(remove_mask) = [];
+    filtered_t(remove_mask) = [];
+    filtered_p(remove_mask) = [];
 
     % Ensure polarity is -1 and 1 (if it's 0 and 1)
     p_signed = double(filtered_p);
@@ -959,6 +997,27 @@ for frameIndex = 1:frame_total
         % Accumulate polarity into a 2D grid
         % If multiple events land on one pixel, we sum their polarities 
         polarity_map = accumarray([filtered_x, filtered_y], p_signed, imgSz, @sum, 0);
+        test_map = polarity_map.*filtered_coherence_map;
+
+        % targetSz = ceil(imgSz / 2);
+        % % Use imresize to downsample (preserve range); convert to single for processing
+        map1 = test_map;
+        map1(map1<0)=0;
+        map2 = -test_map;
+        map2(map2<0)=0;
+
+        % [th_lo1, diag1] = stats.findElbowThreshold(map1);
+        % [th_lo2, diag2] = stats.findElbowThreshold(map2);
+        th_lo1 = 0.01;
+        th_lo2 = 0.01;
+        test_map(test_map<th_lo1 & test_map>0)=0;
+        test_map(test_map>-th_lo2 & test_map<0)=0;
+
+        test_map(test_map>th_lo1)=1;
+        test_map(test_map< -th_lo2)=-1;
+
+
+        polarity_map = test_map;
     
         [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
         accumulator.localAdaptiveTimeSurface(iei_map,...

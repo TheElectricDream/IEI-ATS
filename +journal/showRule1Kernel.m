@@ -133,7 +133,7 @@ function fig = showRule1Kernel(sorted_x, sorted_y, sorted_t, ...
 
     % Outside events (faint grey background)
     scatter3(ax, ex(outsideIdx), ey(outsideIdx), et(outsideIdx), ...
-        6, [0.75 0.75 0.75], 'filled', 'MarkerFaceAlpha', 0.25);
+        6, [0.75 0.75 0.75], 'filled', 'MarkerFaceAlpha', 0.8);
 
     % Inside events (blue, fully drawn)
     scatter3(ax, ex(inside), ey(inside), et(inside), ...
@@ -154,26 +154,20 @@ function fig = showRule1Kernel(sorted_x, sorted_y, sorted_t, ...
     axis(ax, 'equal');
     grid(ax, 'on');
     box(ax, 'on');
-    view(ax, 3);
     camlight(ax, 'headlight');
     lighting(ax, 'gouraud');
 
-    xlabel(ax, 'x / imgSz(1)');
-    ylabel(ax, 'y / imgSz(2)');
-    zlabel(ax, '(t - t_0) / \Delta T');
+    xlabel(ax, 'X_{norm} [-]');
+    ylabel(ax, 'Y_{norm} [-]');
+    zlabel(ax, 't_{norm} [-]');
     % title(ax, sprintf(['Rule 1 kernel at event %d: ' ...
     %     'r_s = %.3f, %d neighbours inside'], ...
     %     centerIdx, r_s, nnz(inside)));
+    legend('Excluded Events', 'Included Events', 'Seed Event','Kernel Sphere', 'FontSize', 16, 'FontName', 'Times New Roman');
+    view(3);
+    set(gca, 'FontSize', 16, 'FontName', 'Times New Roman');
+    set(gcf, 'DefaultTextFontName', 'Times New Roman', 'DefaultAxesFontName', 'Times New Roman');
+    exportgraphics(gcf,'/home/alexandercrain/Dropbox/Graduate Documents/Doctor of Philosophy/Publications/Journals/AIAA Journal of Spacecraft and Rockets/Event_Based_Spacecraft_Representation_Using_Inter_Event_Interval_Adaptive_Time_Surfaces/results/generated-figures/Spherical-Kernel-Sample-Nominal-Rot.pdf');
 
-    set(ax, 'FontSize', 14, 'FontName', 'Times New Roman');
-    set(fig, 'DefaultTextFontName', 'Times New Roman', ...
-             'DefaultAxesFontName', 'Times New Roman');
-
-    % ----------------------------------------------------------------
-    % 6. Optional export
-    % ----------------------------------------------------------------
-    if ~isempty(exportPath)
-        exportgraphics(fig, exportPath, 'ContentType', 'image', 'Resolution', 300);
-    end
 
 end
