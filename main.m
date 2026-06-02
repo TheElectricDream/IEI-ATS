@@ -900,7 +900,7 @@ for frameIndex = 1:frame_total
         [th_lo, diag] = stats.findElbowThreshold(ds_mask);
 
         % Use the threshold on the mask & log the result
-        % filter_mask(filter_mask < th_lo) = 0;
+        filter_mask(filter_mask < th_lo) = 0;
 
         % Compute event-level pass/total counts for the COH filter.
         % The other filters return these directly; COH needs them
@@ -997,27 +997,7 @@ for frameIndex = 1:frame_total
         % Accumulate polarity into a 2D grid
         % If multiple events land on one pixel, we sum their polarities 
         polarity_map = accumarray([filtered_x, filtered_y], p_signed, imgSz, @sum, 0);
-        test_map = polarity_map.*filtered_coherence_map;
-
-        % targetSz = ceil(imgSz / 2);
-        % % Use imresize to downsample (preserve range); convert to single for processing
-        map1 = test_map;
-        map1(map1<0)=0;
-        map2 = -test_map;
-        map2(map2<0)=0;
-
-        % [th_lo1, diag1] = stats.findElbowThreshold(map1);
-        % [th_lo2, diag2] = stats.findElbowThreshold(map2);
-        th_lo1 = 0.01;
-        th_lo2 = 0.01;
-        test_map(test_map<th_lo1 & test_map>0)=0;
-        test_map(test_map>-th_lo2 & test_map<0)=0;
-
-        test_map(test_map>th_lo1)=1;
-        test_map(test_map< -th_lo2)=-1;
-
-
-        polarity_map = test_map;
+        polarity_map = polarity_map.*filter_mask;
     
         [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
         accumulator.localAdaptiveTimeSurface(iei_map,...

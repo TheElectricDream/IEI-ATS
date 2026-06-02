@@ -75,30 +75,7 @@ function [similarity_score, cv_map, regularity_map] = findSimilarities(sorted_x,
     %      CV = 1   -> score = 0.5   (std equals mean)
     %      CV -> inf -> score -> 0   (highly irregular)
     % ----------------------------------------------------------------
-    regularity_score = 1 ./ (1 + cv_map);
-
-    % ----------------------------------------------------------------
-    % 4. IEI magnitude score: penalize very large intervals
-    %    Addresses the failure mode where a pure-noise region has
-    %    low CV because all noise pixels fire at similarly slow rates.
-    %    The median observed mean IEI serves as a robust scale anchor.
-    % ----------------------------------------------------------------
-    observed_mean_iei = mean_map(obs_mask);
-
-    if ~isempty(observed_mean_iei)
-        iei_median = median(observed_mean_iei);
-        magnitude_score = exp(-mean_map ./ max(2 * iei_median, eps));
-    else
-        magnitude_score = zeros(imgSz);
-    end
-
-    % Inactive pixels get zero magnitude score
-    magnitude_score(~obs_mask) = 0;
-
-    % ----------------------------------------------------------------
-    % 5. Combined regularity map
-    % ----------------------------------------------------------------
-    regularity_map = regularity_score;
+    regularity_map = 1 ./ (1 + cv_map);
 
     % ----------------------------------------------------------------
     % 6. Look up per-event scores

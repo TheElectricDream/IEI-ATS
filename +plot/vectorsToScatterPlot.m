@@ -1,4 +1,4 @@
-function [] = vectorsToScatterPlot(x, y, z, holdFig)
+function [] = vectorsToScatterPlot(x, y, z)
 % VECTORSTOSCATTERPLOT  3D scatter plot from raw coordinate vectors.
 %
 %   VECTORSTOSCATTERPLOT(X, Y, Z, HOLDFIG) displays a 3D scatter
@@ -10,17 +10,36 @@ function [] = vectorsToScatterPlot(x, y, z, holdFig)
 %
 %   See also: plot.mapToScatterPlot
 
-    if holdFig
-        figure(16);
-        hold on;
+    x_trimmed = x./640;
+    y_trimmed = y./480;
+    % Normalize z to range [0,1]
+    z_min = min(z(:));
+    z_max = max(z(:));
+    if z_max > z_min
+        z_trimmed = (z - z_min) ./ (z_max - z_min);
     else
-        figure();
+        z_trimmed = zeros(size(z)); % constant input -> map to zero
     end
 
-    scatter3(x, y, z, 36, z, 'filled');
+    fig = figure();
+    ax  = axes('Parent', fig);
+    scatter3(x_trimmed, y_trimmed, z_trimmed, ...
+        100, z_trimmed, '.');
+    xlabel('X_{norm} [-]')
+    ylabel('Y_{norm} [-]')
+    zlabel('t_{norm} [-]')
+    axis(ax, 'equal');
+    grid(ax, 'on');
+    box(ax, 'on');
+    xlim(ax, [0 1]);
+    ylim(ax, [0 1]);
+    zlim(ax, [0 1]);
+    camlight(ax, 'headlight');
+    lighting(ax, 'gouraud');
     colormap(jet);
     colorbar;
-    view(3);
-    set(gca, 'FontSize', 16);
+    set(gca, 'FontSize', 16, 'FontName', 'Times New Roman');
+    set(gcf, 'DefaultTextFontName', 'Times New Roman', 'DefaultAxesFontName', 'Times New Roman');
+
 
 end
