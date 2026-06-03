@@ -27,8 +27,8 @@ if isLooping == false
 
     % Set dataset name
     %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-    fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
-    %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
+    %fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+    fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
     %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
     %fileName = 'ZED-ROT-NOM.h5';
     %fileName = 'ZED-ROT-NOM-SLOWMO.h5';
@@ -914,6 +914,18 @@ for frameIndex = 1:frame_total
 
         frame_metrics.FilterThreshold(frameIndex) = th_lo;
         elbowDiagnostics{frameIndex} = diag; %#ok<SAGROW>
+        
+        % SG: 210
+        % NOM: 160
+        %
+        if frameIndex == 210
+            fprintf('\nPause for Graphs.\n')
+            journal.showScatterPlotOfRuleMaps(norm_trace_map, 'Norm-Trace-Map-Sample-Density-Nominal-Rot-SG.pdf', true)
+            journal.showScatterPlotOfRuleMaps(norm_similarity_map, 'Similarity-Map-Nominal-Rot-SG.pdf', true)
+            journal.showScatterPlotOfRuleMaps(norm_persist_map, 'Persistence-Map-Nominal-Rot-SG.pdf', true)
+            journal.showScatterPlotOfRuleMaps(filtered_coherence_map, 'Coherence-Map-Nominal-Rot-SG.pdf', true)
+            journal.showScatterPlotOfHotPixelAccumulatorMap(norm_similarity_map);
+        end
 
     elseif strcmp(filterSelection, 'NONE') == 1
 

@@ -85,7 +85,7 @@ function [norm_trace_map, norm_similarity_map, ...
     % ----------------------------------------------------------------
     % 1. Define the "Poisson Band" 
     % A CV between 0.8 and 1.25 yields a regularity score between ~0.44 and ~0.55.
-    poisson_mask = (norm_similarity_map > 0.1) & (norm_similarity_map < 0.9);
+    poisson_mask = (norm_similarity_map > 0.2) & (norm_similarity_map < 0.8);
     
     % 2. Isolate hyperactivity
     % We only care about the event counts of pixels that lack temporal structure
