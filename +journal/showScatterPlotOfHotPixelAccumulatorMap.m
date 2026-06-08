@@ -1,17 +1,15 @@
-function [] = showScatterPlotOfHotPixelAccumulatorMap(map)
+function [] = showScatterPlotOfHotPixelAccumulatorMap(map, name, show)
 % MAPTOSCATTERPLOT  3D scatter plot from a 2D value map with threshold bounds.
 %
 %   MAPTOSCATTERPLOT(MAP) converts a 2D map to a point
-%   cloud and displays it as a 3D scatter plot. Points within the hot 
-%   pixel threshold are colored red, and nominal points are colored green, 
+%   cloud and displays it as a 3D scatter plot. Points above the hot 
+%   pixel upper threshold are colored green, and nominal points are colored red, 
 %   matching their respective bounding volumes.
 %
 %   See also: process.generateMeshFromFrame, plot.mapToSurfPlot
 
     % --- Threshold Configuration ---
-    % Adjust these values to match the specific accumulator thresholds 
-    % defining your hot-pixel region.
-    z_hot_lower = 0.2; % Lower bound of the hot pixel region
+    % Only an upper bound is used to define the hot-pixel region.
     z_hot_upper = 0.8; % Upper bound of the hot pixel region
     
     [pointCloud] = process.generateMeshFromFrame(map');
@@ -19,11 +17,15 @@ function [] = showScatterPlotOfHotPixelAccumulatorMap(map)
     y_trimmed = pointCloud(~isnan(pointCloud(:,3)), 2)./480;
     z_trimmed = pointCloud(~isnan(pointCloud(:,3)), 3);
     
-    % Dynamically cap the top and bottom of the green regions to the data range
+    % Dynamically cap the top of the green region to the data range
     z_min_data = min(z_trimmed);
     z_max_data = max(z_trimmed);
 
-    fig = figure();
+    if show
+        fig = figure();
+    else
+        fig = figure('Visible', 'off'); % Create a figure without displaying it
+    end
     ax  = axes('Parent', fig);
     
     % Ensure OpenGL renderer is used for proper transparency export to PDF
@@ -35,32 +37,31 @@ function [] = showScatterPlotOfHotPixelAccumulatorMap(map)
     x_bounds = [0, 1]; % Normalized X limits
     y_bounds = [0, 1]; % Normalized Y limits
     
-    % 1. Bottom Nominal Region (Faint Green)
-    if z_min_data < z_hot_lower
-        drawFaintCube(ax, x_bounds, y_bounds, [z_min_data, z_hot_lower], 'g', 0.03);
+    % Prepare handles for legend entries
+    hBelow = []; 
+    hAbove = [];
+    
+    % 1. Nominal Region (Faint Red) - everything below the upper bound
+    if z_min_data < z_hot_upper
+        hBelow = drawFaintCube(ax, x_bounds, y_bounds, [z_min_data, min(z_hot_upper, z_max_data)], 'r', 0.05);
     end
     
-    % 2. Hot Pixel Region (Faint Red)
-    drawFaintCube(ax, x_bounds, y_bounds, [z_hot_lower, z_hot_upper], 'r', 0.05);
-    
-    % 3. Top Nominal Region (Faint Green) - Optional, depends on your filter logic
+    % 2. Hot Pixel Region (Faint Green) - above the upper bound up to data max
     if z_max_data > z_hot_upper
-        drawFaintCube(ax, x_bounds, y_bounds, [z_hot_upper, max(z_max_data, z_hot_upper+0.1)], 'g', 0.03);
+        hAbove = drawFaintCube(ax, x_bounds, y_bounds, [z_hot_upper, z_max_data], 'g', 0.03);
     end
 
     % --- Point Cloud Coloring Logic ---
-    % Initialize an N x 3 matrix for RGB colors, defaulting to a nominal green
-    pointColors = repmat([0.15 0.7 0.15], length(z_trimmed), 1); 
+    % Initialize an N x 3 matrix for RGB colors, defaulting to a nominal red
+    pointColors = repmat([0.85 0.15 0.15], length(z_trimmed), 1); 
     
-    % Create a logical mask for points that fall strictly within the hot pixel bounds
-    isHotPixel = (z_trimmed >= z_hot_lower) & (z_trimmed <= z_hot_upper);
+    % Create a logical mask for points that are above the hot pixel upper bound
+    isHotPixel = (z_trimmed > z_hot_upper);
     
-    % Overwrite the color for hot pixels to a distinct red
-    pointColors(isHotPixel, :) = repmat([0.85 0.15 0.15], sum(isHotPixel), 1);
+    % Overwrite the color for hot pixels to a distinct green
+    pointColors(isHotPixel, :) = repmat([0.15 0.7 0.15], sum(isHotPixel), 1);
 
     % --- Plot Scatter Data ---
-    % Plotting this after the patches ensures the points are rendered on top/inside.
-    % We pass the Nx3 pointColors matrix as the color argument.
     scatter3(ax, x_trimmed, y_trimmed, z_trimmed, 100, pointColors, '.');
     
     % --- Formatting ---
@@ -68,7 +69,7 @@ function [] = showScatterPlotOfHotPixelAccumulatorMap(map)
     
     xlabel(ax, 'X_{norm} [-]')
     ylabel(ax, 'Y_{norm} [-]')
-    zlabel(ax, '\rho_{norm} [-]')
+    zlabel(ax, 'S(x,y) [-]')
     axis(ax, 'equal');
     grid(ax, 'on');
     box(ax, 'on');
@@ -80,20 +81,34 @@ function [] = showScatterPlotOfHotPixelAccumulatorMap(map)
     camlight(ax, 'headlight');
     lighting(ax, 'gouraud');
     
-    % Note: colormap(ax, jet) and colorbar(ax) have been removed 
-    % since we are explicitly defining discrete point colors.
-    
     set(ax, 'FontSize', 16, 'FontName', 'Times New Roman');
     set(fig, 'DefaultTextFontName', 'Times New Roman', 'DefaultAxesFontName', 'Times New Roman');
     
+    % Add legend for the transparent regions. Use the patch handles if they exist.
+    legendEntries = {};
+    legendHandles = [];
+    if ~isempty(hAbove)
+        legendHandles(end+1) = hAbove; %#ok<AGROW>
+        legendEntries{end+1} = 'Above Threshold'; %#ok<AGROW>
+    end
+    if ~isempty(hBelow)
+        legendHandles(end+1) = hBelow; %#ok<AGROW>
+        legendEntries{end+1} = 'Below Threshold'; %#ok<AGROW>
+    end
+    if ~isempty(legendHandles)
+        % Create legend without altering axis children order
+        lh = legend(ax, legendHandles, legendEntries, 'Location', 'northeast');
+        set(lh, 'Box', 'on', 'FontSize', 16);
+    end
+
     hold(ax, 'off');
     
     % Export to PDF
-    exportgraphics(fig, '/home/alexandercrain/Dropbox/Graduate Documents/Doctor of Philosophy/Publications/Journals/AIAA Journal of Spacecraft and Rockets/Event_Based_Spacecraft_Representation_Using_Inter_Event_Interval_Adaptive_Time_Surfaces/results/generated-figures/Hot-Pixel-Accumulator-Map-Nominal-Rot.pdf');
+    journal.exportTight3DScatterPlots(gcf, ['/home/alexandercrain/Dropbox/Graduate Documents/Doctor of Philosophy/Publications/Journals/AIAA Journal of Spacecraft and Rockets/Event_Based_Spacecraft_Representation_Using_Inter_Event_Interval_Adaptive_Time_Surfaces/results/generated-figures/' name]);
 end
 
 % --- Local Helper Function ---
-function drawFaintCube(ax, x_bounds, y_bounds, z_bounds, colorStr, alphaVal)
+function h = drawFaintCube(ax, x_bounds, y_bounds, z_bounds, colorStr, alphaVal)
     % Generates an 8-vertex 3D box and draws it using patch for transparency support.
     
     % Define the 8 vertices of a rectangular prism
@@ -105,7 +120,7 @@ function drawFaintCube(ax, x_bounds, y_bounds, z_bounds, colorStr, alphaVal)
     faces = [1 2 3 4; 5 6 7 8; 1 2 6 5; 2 3 7 6; 3 4 8 7; 4 1 5 8];
     
     % Draw the patch onto the specified axes
-    patch(ax, 'Vertices', [x' y' z'], 'Faces', faces, ...
+    h = patch(ax, 'Vertices', [x' y' z'], 'Faces', faces, ...
         'FaceColor', colorStr, 'FaceAlpha', alphaVal, ...
         'EdgeColor', 'k', 'EdgeAlpha', 1.0, ...  % Solid black edges
         'LineWidth', 1.5, ...                    % Increased line weight for visibility

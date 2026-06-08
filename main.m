@@ -28,8 +28,8 @@ if isLooping == false
     % Set dataset name
     %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
     %fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
-    fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
-    %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
+    %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
+    fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
     %fileName = 'ZED-ROT-NOM.h5';
     %fileName = 'ZED-ROT-NOM-SLOWMO.h5';
 
@@ -115,6 +115,19 @@ frame_total                 = floor(t_total / t_interval);
 
 % Set the image size
 imgSz                       = [640, 480]; 
+
+% Set the plotting frame for journal paper figures
+genFigures                  = true;  % Slows down code
+
+% plottingFrame               = 205;  % For Nominal Lighting
+% plottingType                = '-NOM';
+
+% plottingFrame               = 179;  % For High Glare
+% plottingType                = '-SG';
+
+plottingFrame               = 181;  % For Low Light
+plottingType                = '-DARK';
+
 
 %% Initialize Filter Parameters
 
@@ -358,9 +371,10 @@ stcc_n_total_store          = zeros(1, frame_total);
 % Tuning Guide:
 
 coh_params.iei_alpha        = 0.8; 
-coh_params.r_s              = 50/imgSz(1);
+coh_params.r_s              = 30/imgSz(1);
 filter_mask                 = ones(imgSz);
 iei_map                     = zeros(imgSz);
+global_hot_mask             = zeros(imgSz);
 
 %% Initialize Accumulator Parameters
 
@@ -678,6 +692,8 @@ frame_metrics.EventsInFrame        = zeros(1, frame_total);
 frame_metrics.FilteredEvents       = zeros(1, frame_total);
 frame_metrics.FilteringMEVs        = zeros(1, frame_total);
 frame_metrics.AccumulatorMEVs      = zeros(1, frame_total);
+frame_metrics.HotPixelCount        = zeros(1, frame_total);
+frame_metrics.HotPixelThresh       = zeros(1, frame_total);
 
 elbowDiagnostics = {};
 
@@ -873,15 +889,10 @@ for frameIndex = 1:frame_total
         % --------------------- COHERENCE FILTER -------------------------%
         % ----------------------------------------------------------------%
         [norm_trace_map, norm_similarity_map, norm_persist_map,...
-            filtered_coherence_map, hot_pixel_accumulator] = filters.computeCoherenceMask(sorted_x,...
+            filtered_coherence_map, hot_pixel_accumulator, aperiodic_mask, persistent_hot_mask, global_hot_mask] = filters.computeCoherenceMask(sorted_x,...
             sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
             group_ends, coh_params, frameIndex, norm_trace_map_prev, t_std_diff,...
-            t_mean_diff, counts, hot_pixel_accumulator);
-        
-        secondary_hot_mask = norm_persist_map == 1;
-    
-        % 4. Strip the defective pixels globally
-        secondary_hot_pixel_idx = find(secondary_hot_mask);
+            t_mean_diff, counts, hot_pixel_accumulator, plottingFrame, genFigures, plottingType, global_hot_mask);
 
         % Set any retention variables
         norm_trace_map_prev = norm_trace_map;
@@ -914,17 +925,31 @@ for frameIndex = 1:frame_total
 
         frame_metrics.FilterThreshold(frameIndex) = th_lo;
         elbowDiagnostics{frameIndex} = diag; %#ok<SAGROW>
-        
-        % SG: 210
-        % NOM: 160
-        %
-        if frameIndex == 210
-            fprintf('\nPause for Graphs.\n')
-            journal.showScatterPlotOfRuleMaps(norm_trace_map, 'Norm-Trace-Map-Sample-Density-Nominal-Rot-SG.pdf', true)
-            journal.showScatterPlotOfRuleMaps(norm_similarity_map, 'Similarity-Map-Nominal-Rot-SG.pdf', true)
-            journal.showScatterPlotOfRuleMaps(norm_persist_map, 'Persistence-Map-Nominal-Rot-SG.pdf', true)
-            journal.showScatterPlotOfRuleMaps(filtered_coherence_map, 'Coherence-Map-Nominal-Rot-SG.pdf', true)
-            journal.showScatterPlotOfHotPixelAccumulatorMap(norm_similarity_map);
+
+        % Calculate the total number of currently identified hot pixels
+        frame_metrics.HotPixelCount(frameIndex) = sum(persistent_hot_mask(:));
+
+        if frameIndex == plottingFrame && genFigures
+            fprintf(['\nPlotting Norm-Trace-Map-Sample-Density-Nominal-Rot' plottingType '.pdf\n'])
+            journal.showScatterPlotOfRuleMaps(norm_trace_map, ['Norm-Trace-Map-Sample-Density-Nominal-Rot' plottingType '.pdf'], false)
+            fprintf(['\nPlotting Norm-Trace-Map-Sample-Density-Nominal-Rot' plottingType '-3D.pdf\n'])
+            journal.showScatterPlotOfRuleMaps3D(norm_trace_map, ['Norm-Trace-Map-Sample-Density-Nominal-Rot' plottingType '-3D.pdf'], false)
+            fprintf(['\nPlotting Similarity-Map-Nominal-Rot' plottingType '.pdf\n'])
+            journal.showScatterPlotOfRuleMaps3D(norm_similarity_map, ['Similarity-Map-Nominal-Rot' plottingType '.pdf'], false)
+            fprintf(['\nPlotting Persistence-Map-Nominal-Rot' plottingType '.pdf\n'])
+            journal.showScatterPlotOfRuleMaps3D(norm_persist_map, ['Persistence-Map-Nominal-Rot' plottingType '.pdf'], false)
+            fprintf(['\nPlotting Coherence-Map-Nominal-Rot' plottingType '.pdf\n'])
+            journal.showScatterPlotOfRuleMaps3D(filtered_coherence_map, ['Coherence-Map-Nominal-Rot' plottingType '.pdf'], false)
+            fprintf(['\nPlotting Hot-Pixel-Accumulator-Map-Nominal-Rot' plottingType '.pdf\n'])
+            journal.showScatterPlotOfHotPixelAccumulatorMap(norm_similarity_map, ['Hot-Pixel-Accumulator-Map-Nominal-Rot' plottingType '.pdf'], false);
+            fprintf(['\nPlotting Hot-Pixel-Accumulator-Map-Nominal-Rot' plottingType '-2D.pdf\n'])
+            journal.show2DScatterOfLeakyBucketMap(sorted_x, sorted_y,norm_similarity_map>0.8, ['Hot-Pixel-Accumulator-Map-Nominal-Rot' plottingType '-2D.pdf'], false);
+            fprintf(['\nPlotting Regularity-Score-Histogram-Nominal-Rot' plottingType '.pdf\n'])
+            journal.showRegularityScoreHistogram(norm_similarity_map, ['Regularity-Score-Histogram-Nominal-Rot' plottingType '.pdf'], false);
+            fprintf(['\nPlotting Unfiltered-Event-Data-Nominal-Rot' plottingType '.pdf\n'])
+            journal.showScatterPlotOfEventVector(sorted_x, sorted_y, sorted_t, ['Unfiltered-Event-Data-Nominal-Rot' plottingType '.pdf'], false)
+            fprintf(['\nPlotting Leaky-Bucket-Map-Nominal-Rot' plottingType '.pdf\n'])
+            journal.show2DScatterOfLeakyBucketMap(sorted_x, sorted_y, persistent_hot_mask, ['Leaky-Bucket-Map-Nominal-Rot' plottingType '.pdf'], false);
         end
 
     elseif strcmp(filterSelection, 'NONE') == 1
@@ -954,11 +979,8 @@ for frameIndex = 1:frame_total
     filtered_p = sorted_p;
     
     if strcmp(filterSelection, 'COH') == 1
-        % Remove the HOT PIXELS identified using IEI
-        norm_hot_pixel = log1p(hot_pixel_accumulator) ./ max(log1p(hot_pixel_accumulator));
-        persistent_hot_mask = norm_hot_pixel == 1.0;
                
-        % 4. Strip the defective pixels globally
+        % Strip the defective pixels globally
         hot_pixel_idx = find(persistent_hot_mask);
         
         if ~isempty(hot_pixel_idx)
@@ -973,17 +995,11 @@ for frameIndex = 1:frame_total
             
         end
 
-        if ~isempty(secondary_hot_pixel_idx)
-            % Strip from the coordinate arrays
-            sorted_lin_idx = sub2ind(imgSz, filtered_x, filtered_y);
-            remove_mask = ismember(sorted_lin_idx, secondary_hot_pixel_idx);
-            
-            filtered_x(remove_mask) = [];
-            filtered_y(remove_mask) = [];
-            filtered_t(remove_mask) = [];
-            filtered_p(remove_mask) = [];
-            
-        end
+    end
+
+    if frameIndex == plottingFrame && genFigures
+        fprintf(['\nPlotting Hot-Pixel-Only-Filtered-Event-Data-Nominal-Rot' plottingType '.pdf\n'])
+        journal.showScatterPlotOfEventVector(filtered_x, filtered_y, filtered_t, ['Hot-Pixel-Only-Filtered-Event-Data-Nominal-Rot' plottingType '.pdf'], false)
     end
 
     % Any events which fall within the filter mask should not be included
@@ -1000,6 +1016,11 @@ for frameIndex = 1:frame_total
     % Ensure polarity is -1 and 1 (if it's 0 and 1)
     p_signed = double(filtered_p);
     p_signed(p_signed == 0) = -1;
+    
+    if frameIndex == plottingFrame && genFigures
+        fprintf(['\nPlotting Fully-Filtered-Event-Data-Nominal-Rot' plottingType '.pdf\n'])
+        journal.showScatterPlotOfEventVector(filtered_x, filtered_y, filtered_t, ['Fully-Filtered-Event-Data-Nominal-Rot' plottingType '.pdf'], false)
+    end
 
     if strcmp(accumulatorSelection, 'IEI-ATS') == 1
 
@@ -1009,7 +1030,7 @@ for frameIndex = 1:frame_total
         % Accumulate polarity into a 2D grid
         % If multiple events land on one pixel, we sum their polarities 
         polarity_map = accumarray([filtered_x, filtered_y], p_signed, imgSz, @sum, 0);
-        polarity_map = polarity_map.*filter_mask;
+        %polarity_map = polarity_map.*filter_mask;
     
         [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
         accumulator.localAdaptiveTimeSurface(iei_map,...

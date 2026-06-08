@@ -1,4 +1,4 @@
-function [] = showScatterPlotOfRuleMaps(map, name, show)
+function [] = showScatterPlotOfRuleMaps3D(map, name, show)
 % MAPTOSCATTERPLOT  3D scatter plot from a 2D value map.
 %
 %   MAPTOSCATTERPLOT(MAP, HOLDFIG) converts a 2D map to a point
@@ -25,21 +25,27 @@ function [] = showScatterPlotOfRuleMaps(map, name, show)
         fig = figure('Visible', 'off');
         
     end
+    
     ax  = axes('Parent', fig);
-    % Mirror points in y-axis: flip y around 0.5 (assuming normalized [0,1])
-    % This mirrors the image vertically so it displays with correct orientation.
-    y_mirrored = (1 - y_trimmed);
-    scatter(x_trimmed, y_mirrored, 100, z_trimmed, '.')
+    scatter3(x_trimmed, y_trimmed, z_trimmed, ...
+        100, z_trimmed, '.');
     xlabel('X_{norm} [-]')
     ylabel('Y_{norm} [-]')
+    zlabel('t_{norm} [-]')
+    axis(ax, 'equal');
     grid(ax, 'on');
     box(ax, 'on');
-    axis(ax,[min(x_trimmed), max(x_trimmed), min(y_mirrored), max(y_mirrored)]);
-    pbaspect(ax, [640 480 1]);
+    xlim(ax, [0 1]);
+    ylim(ax, [0 1]);
+    zlim(ax, [0 1]);
+    camlight(ax, 'headlight');
+    lighting(ax, 'gouraud');
+    view(ax, 3);
     colormap(jet);
-    colorbar;
-    set(gca, 'FontSize', 30, 'FontName', 'Times New Roman');
+    %colorbar;
+    set(gca, 'FontSize', 16, 'FontName', 'Times New Roman');
     set(gcf, 'DefaultTextFontName', 'Times New Roman', 'DefaultAxesFontName', 'Times New Roman');
-    %exportgraphics(gcf,['/home/alexandercrain/Dropbox/Graduate Documents/Doctor of Philosophy/Publications/Journals/AIAA Journal of Spacecraft and Rockets/Event_Based_Spacecraft_Representation_Using_Inter_Event_Interval_Adaptive_Time_Surfaces/results/generated-figures/' name]);
+
     journal.exportTight3DScatterPlots(gcf, ['/home/alexandercrain/Dropbox/Graduate Documents/Doctor of Philosophy/Publications/Journals/AIAA Journal of Spacecraft and Rockets/Event_Based_Spacecraft_Representation_Using_Inter_Event_Interval_Adaptive_Time_Surfaces/results/generated-figures/' name]);
+
 end

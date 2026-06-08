@@ -1,6 +1,6 @@
 function [norm_trace_map, norm_similarity_map, ...
     norm_persist_map, norm_coherence_map, hot_pixel_accumulator,...
-    aperiodic_mask, persistent_hot_mask, global_hot_mask] = ...
+    aperiodic_mask, persistent_hot_mask, global_hot_mask, hot_pixel_thresh] = ...
     computeCoherenceMask(sorted_x, sorted_y, sorted_t, imgSz, ...
     t_interval, unique_idx, pos, group_ends, coh_params, ...
     frameIndex, norm_trace_map_prev, std_map, mean_map, counts, hot_pixel_accumulator, ...
@@ -30,23 +30,46 @@ function [norm_trace_map, norm_similarity_map, ...
     % We only care about the event counts of pixels that lack temporal structure
     poisson_counts = counts(poisson_mask);
     
+    % Pre-allocate the mask to prevent errors if the 'if' condition is false
+    current_hot_mask = false(size(counts)); 
+    
     if ~isempty(poisson_counts) && length(poisson_counts) > 10
-        
         count_th = median(poisson_counts) + 5 * mad(poisson_counts, 1);
         current_hot_mask = poisson_mask & (counts > count_th);
-
     end
         
-    % 2. Update the Leaky Bucket Memory
+    % 3. Update the Leaky Bucket Memory
     % Add current flags, then decay by 10% (multiply by 0.9). 
     % A consistent hot pixel will accumulate up to ~10.0 over time.
     hot_pixel_accumulator = (hot_pixel_accumulator + current_hot_mask) * 0.90;
     
-    % 3. Define the Persistent Hot Mask
-    % If a pixel's accumulator is > 2.0, it has been flagged in at least 
-    % 3 recent frames. It is considered a confirmed hardware defect.
-    persistent_hot_mask = hot_pixel_accumulator > 3.0;
-
+    % ----------------------------------------------------------------
+    % NEW ADAPTIVE THRESHOLD FOR PERSISTENT MASK
+    % ----------------------------------------------------------------
+    % Calculate the mean and standard deviation of the leaky bucket
+    % Compute stats ignoring zeros and NaNs
+    acc_vals = hot_pixel_accumulator(~isnan(hot_pixel_accumulator) & hot_pixel_accumulator ~= 0);
+    if isempty(acc_vals)
+        mu_acc = 0;
+        sigma_acc = 0;
+    else
+        mu_acc = mean(acc_vals);
+        sigma_acc = std(acc_vals);
+    end
+    
+    % Adaptive threshold: 5 standard deviations above the mean
+    k_acc = 5; 
+    dynamic_th = mu_acc + (k_acc * sigma_acc);
+    
+    % Apply a minimum safety floor (your original 2.0) so it doesn't 
+    % over-filter during pitch-black/silent periods.
+    hot_pixel_thresh = max(dynamic_th, 2.0);
+    
+    % If a pixel's accumulator is > final_th, it is considered a hardware defect.
+    persistent_hot_mask = hot_pixel_accumulator > hot_pixel_thresh;
+    
+    % ----------------------------------------------------------------
+    
     if frameIndex == 1
         global_hot_mask = persistent_hot_mask;
     else
@@ -55,11 +78,10 @@ function [norm_trace_map, norm_similarity_map, ...
     
     % 4. Strip the defective pixels globally
     hot_pixel_idx = find(persistent_hot_mask);
-
     filtered_x = sorted_x;
     filtered_y = sorted_y;
     filtered_t = sorted_t;
-    
+        
     if ~isempty(hot_pixel_idx)
         % Strip from the coordinate arrays
         sorted_lin_idx = sub2ind(imgSz, filtered_x, filtered_y);
