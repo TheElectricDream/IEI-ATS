@@ -1,3 +1,47 @@
+% function [closestRows, closestCols, minDists, validIndicesA] = ...
+%     findPersistenceVectorized(mapA, mapB, imgSz)
+% % FINDPERSISTENCEVECTORIZED  Cross-frame persistence via spatial KNN search.
+% 
+% % ----------------------------------------------------------------
+% % 0. Extract reference points from mapB (Spatial Only, No Normalization)
+% % ----------------------------------------------------------------
+% idxB = find(mapB > 1e-6);
+% if isempty(idxB)
+%     closestRows = []; closestCols = []; minDists = []; validIndicesA = [];
+%     return;
+% end
+% [b_rows, b_cols] = ind2sub(imgSz, idxB);
+% 
+% % ----------------------------------------------------------------
+% % 1. Build KD-tree over reference points (2D Pixel Space)
+% % ----------------------------------------------------------------
+% searchSpace = [b_rows, b_cols];
+% tree = createns(searchSpace, 'NsMethod', 'kdtree');
+% 
+% % ----------------------------------------------------------------
+% % 2. Extract query points from mapA (Spatial Only)
+% % ----------------------------------------------------------------
+% idxA = find(mapA > 1e-6);
+% if isempty(idxA)
+%     closestRows = []; closestCols = []; minDists = []; validIndicesA = [];
+%     return;
+% end
+% [t_rows, t_cols] = ind2sub(imgSz, idxA);
+% queryPoints = [t_rows, t_cols];
+% 
+% % ----------------------------------------------------------------
+% % 3. K=1 nearest spatial neighbour search
+% % ----------------------------------------------------------------
+% [idx, d] = knnsearch(tree, queryPoints, 'K', 1);
+% 
+% % Return squared pixel distance (e.g., 0, 1, 2, 4, 5...)
+% minDists = d .^ 2; 
+% 
+% closestRows = b_rows(idx);
+% closestCols = b_cols(idx);
+% validIndicesA = idxA;
+% end
+
 function [closestRows, closestCols, minDists, validIndicesA] = ...
     findPersistenceVectorized(mapA, mapB, imgSz)
 % FINDPERSISTENCEVECTORIZED  Cross-frame persistence via KNN search.

@@ -164,10 +164,10 @@ function fig = showRule1Kernel(sorted_x, sorted_y, sorted_t, ...
     %     'r_s = %.3f, %d neighbours inside'], ...
     %     centerIdx, r_s, nnz(inside)));
     legend('Excluded Events', 'Included Events', 'Seed Event','Kernel Sphere', 'FontSize', 16, 'FontName', 'Times New Roman');
-    view(3);
+    view( 3); % Forces the 3D perspective to prevent locking to 2D
     set(gca, 'FontSize', 16, 'FontName', 'Times New Roman');
     set(gcf, 'DefaultTextFontName', 'Times New Roman', 'DefaultAxesFontName', 'Times New Roman');
-    exportgraphics(gcf,'/home/alexandercrain/Dropbox/Graduate Documents/Doctor of Philosophy/Publications/Journals/AIAA Journal of Spacecraft and Rockets/Event_Based_Spacecraft_Representation_Using_Inter_Event_Interval_Adaptive_Time_Surfaces/results/generated-figures/Spherical-Kernel-Sample-Nominal-Rot.pdf');
+    journal.exportTight3DScatterPlots(gcf,'/home/alexandercrain/Dropbox/Graduate Documents/Doctor of Philosophy/Publications/Journals/AIAA Journal of Spacecraft and Rockets/Event_Based_Spacecraft_Representation_Using_Inter_Event_Interval_Adaptive_Time_Surfaces/results/generated-figures/Spherical-Kernel-Sample-Nominal-Rot.pdf');
 
 
 end

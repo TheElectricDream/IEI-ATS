@@ -12,7 +12,7 @@ if isLooping == false
     close all;
 
     % Use buffered data
-    useBuffer = true;
+    useBuffer = false;
     
     % Select algorithms for filtering and accumulation
     % Set 'None' for filter selection to skip filtering entirely
@@ -27,9 +27,9 @@ if isLooping == false
 
     % Set dataset name
     %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-    %fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+    fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
     %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
-    fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
+    %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
     %fileName = 'ZED-ROT-NOM.h5';
     %fileName = 'ZED-ROT-NOM-SLOWMO.h5';
 
@@ -118,15 +118,15 @@ imgSz                       = [640, 480];
 
 % Set the plotting frame for journal paper figures
 genFigures                  = true;  % Slows down code
-
-% plottingFrame               = 205;  % For Nominal Lighting
-% plottingType                = '-NOM';
+% 
+plottingFrame               = 205;  % 205 For Nominal Lighting
+plottingType                = '-NOM';
 
 % plottingFrame               = 179;  % For High Glare
 % plottingType                = '-SG';
 
-plottingFrame               = 181;  % For Low Light
-plottingType                = '-DARK';
+% plottingFrame               = 181;  % For Low Light
+% plottingType                = '-DARK';
 
 
 %% Initialize Filter Parameters
@@ -896,6 +896,8 @@ for frameIndex = 1:frame_total
 
         % Set any retention variables
         norm_trace_map_prev = norm_trace_map;
+
+        %plot.showImageAsVideo(persistent_hot_mask.*1)
         
         % Create the filter
         filter_mask = filtered_coherence_map;
