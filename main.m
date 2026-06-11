@@ -12,7 +12,7 @@ if isLooping == false
     close all;
 
     % Use buffered data
-    useBuffer = false;
+    useBuffer = true;
     
     % Select algorithms for filtering and accumulation
     % Set 'None' for filter selection to skip filtering entirely
@@ -27,8 +27,8 @@ if isLooping == false
 
     % Set dataset name
     %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-    fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
-    %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
+    %fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+    fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
     %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
     %fileName = 'ZED-ROT-NOM.h5';
     %fileName = 'ZED-ROT-NOM-SLOWMO.h5';
@@ -36,7 +36,7 @@ if isLooping == false
 else
 
     % Use buffered data
-    useBuffer = false;
+    useBuffer = true;
 
 end
 
@@ -119,11 +119,11 @@ imgSz                       = [640, 480];
 % Set the plotting frame for journal paper figures
 genFigures                  = true;  % Slows down code
 % 
-plottingFrame               = 205;  % 205 For Nominal Lighting
-plottingType                = '-NOM';
+% plottingFrame               = 205;  % 205 For Nominal Lighting
+% plottingType                = '-NOM';
 
-% plottingFrame               = 179;  % For High Glare
-% plottingType                = '-SG';
+plottingFrame               = 179;  % For High Glare
+plottingType                = '-SG';
 
 % plottingFrame               = 181;  % For Low Light
 % plottingType                = '-DARK';
@@ -889,32 +889,37 @@ for frameIndex = 1:frame_total
         % --------------------- COHERENCE FILTER -------------------------%
         % ----------------------------------------------------------------%
         [norm_trace_map, norm_similarity_map, norm_persist_map,...
-            filtered_coherence_map, hot_pixel_accumulator, aperiodic_mask, persistent_hot_mask, global_hot_mask] = filters.computeCoherenceMask(sorted_x,...
-            sorted_y, sorted_t, imgSz, t_interval, unique_idx, pos, ...
-            group_ends, coh_params, frameIndex, norm_trace_map_prev, t_std_diff,...
-            t_mean_diff, counts, hot_pixel_accumulator, plottingFrame, genFigures, plottingType, global_hot_mask);
+            filtered_coherence_map, hot_pixel_accumulator, aperiodic_mask,...
+            persistent_hot_mask, global_hot_mask] = filters.computeCoherenceMask(sorted_x,...
+            sorted_y, sorted_t, imgSz, t_interval, coh_params, frameIndex, ...
+            norm_trace_map_prev, t_std_diff,...
+            t_mean_diff, counts, hot_pixel_accumulator, plottingFrame,...
+            genFigures, plottingType, global_hot_mask);
 
         % Set any retention variables
         norm_trace_map_prev = norm_trace_map;
-
-        %plot.showImageAsVideo(persistent_hot_mask.*1)
         
         % Create the filter
         filter_mask = filtered_coherence_map;
         filter_mask(isnan(filter_mask)) = 0;
-        filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
+        filter_mask = single(imgaussfilt(single(filter_mask), 2.0, "FilterSize", 3));
         
         % Use the Kneedle algorithm to find a suitable threshold
         % Downsample filter_mask from 640x480 to 320x240 before thresholding
         % Assume imgSz corresponds to original size; compute target size half in each dim
-        targetSz = ceil(imgSz / 2);
+        %targetSz = ceil(imgSz / 2);
         % Use imresize to downsample (preserve range); convert to single for processing
-        ds_mask = imresize(single(filter_mask), targetSz, 'bilinear');
-        [th_lo, diag] = stats.findElbowThreshold(ds_mask);
+        %ds_mask = imresize(single(filter_mask), targetSz, 'bilinear');
+        %[th_lo, diag] = stats.findElbowThreshold(ds_mask);
 
         % Use the threshold on the mask & log the result
-        filter_mask(filter_mask < th_lo) = 0;
-
+        %filter_mask(filter_mask < th_lo) = 0;
+        % filter_mask = filter_mask.*filtered_coherence_map;
+        % 
+        % test = filter_mask.*filtered_coherence_map;
+        % test_log = log1p(test);
+        % filter_mask = test_log./max(test_log(:));
+        
         % Compute event-level pass/total counts for the COH filter.
         % The other filters return these directly; COH needs them
         % derived from the pixel-level mask and event locations.
@@ -925,8 +930,8 @@ for frameIndex = 1:frame_total
         % Grab the indices of the filtered mask
         filter_mask_idx = find(filter_mask>0);
 
-        frame_metrics.FilterThreshold(frameIndex) = th_lo;
-        elbowDiagnostics{frameIndex} = diag; %#ok<SAGROW>
+        frame_metrics.FilterThreshold(frameIndex) = 0;
+        elbowDiagnostics{frameIndex} = 0; %#ok<SAGROW>
 
         % Calculate the total number of currently identified hot pixels
         frame_metrics.HotPixelCount(frameIndex) = sum(persistent_hot_mask(:));
@@ -1032,7 +1037,7 @@ for frameIndex = 1:frame_total
         % Accumulate polarity into a 2D grid
         % If multiple events land on one pixel, we sum their polarities 
         polarity_map = accumarray([filtered_x, filtered_y], p_signed, imgSz, @sum, 0);
-        %polarity_map = polarity_map.*filter_mask;
+        polarity_map = polarity_map.*filter_mask;
     
         [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
         accumulator.localAdaptiveTimeSurface(iei_map,...
