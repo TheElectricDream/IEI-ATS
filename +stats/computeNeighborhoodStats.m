@@ -1,69 +1,54 @@
 function [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff] = ...
     computeNeighborhoodStats(sorted_t, unique_idx, pos, ...
     group_ends, imgSz)
-% COMPUTENEIGHBORHOODSTATS  Per-pixel IEI statistics from grouped events.
+% COMPUTENEIGHBORHOODSTATS Per-pixel timestamp and inter-event interval (IEI) statistics from grouped event streams.
 %
-%   [T_MEAN, T_STD, T_MAX, T_MIN, T_MEAN_DIFF, T_STD_DIFF] =
-%   COMPUTENEIGHBORHOODSTATS(SORTED_T, UNIQUE_IDX, POS, GROUP_ENDS,
-%   IMGSZ) computes timestamp statistics for each pixel that received
-%   events in the current time window. The inter-event interval (IEI)
-%   statistics (t_mean_diff, t_std_diff) are derived from consecutive
-%   timestamp differences within each pixel's event sequence.
+%     [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff] = ...
+%         computeNeighborhoodStats(sorted_t, unique_idx, pos, ...
+%         group_ends, imgSz)
 %
-%   Inputs:
-%     sorted_t   - [M x 1] Timestamps sorted by linear pixel index,
-%                  then by time within each pixel group.
-%     unique_idx - [K x 1] Linear pixel indices for each active pixel.
-%     pos        - [K x 1] Start position of each pixel's group in
-%                  sorted_t.
-%     group_ends - [K x 1] End position of each pixel's group in
-%                  sorted_t.
-%     imgSz      - [1 x 2] Image dimensions [nRows, nCols].
+%     Inputs:
+%       sorted_t   - [M x 1] Event timestamps grouped by linear pixel
+%                    index and sorted ascending within each group.
+%       unique_idx - [K x 1] Linear pixel index of each group.
+%       pos        - [K x 1] Start index of each group in sorted_t.
+%                    Must be ascending; groups must contiguously
+%                    partition sorted_t.
+%       group_ends - [K x 1] End index of each group in sorted_t.
+%       imgSz      - [1 x 2] Image dimensions [nRows, nCols].
 %
-%   Outputs:
-%     t_mean      - [imgSz] Mean timestamp per pixel.
-%     t_std       - [imgSz] Standard deviation of timestamps.
-%     t_max       - [imgSz] Maximum timestamp per pixel.
-%     t_min       - [imgSz] Minimum timestamp per pixel.
-%     t_mean_diff - [imgSz] Mean inter-event interval (IEI) per pixel.
-%                   Zero if the pixel received only one event.
-%     t_std_diff  - [imgSz] Standard deviation of IEI per pixel.
+%     Outputs (all [imgSz] double maps; zero at pixels with no events):
+%       t_mean      - Mean timestamp.
+%       t_std       - Sample (Bessel-corrected) standard deviation of
+%                     timestamps. Zero for single-event pixels.
+%       t_max       - Maximum timestamp.
+%       t_min       - Minimum timestamp.
+%       t_mean_diff - Mean IEI. Zero for single-event pixels.
+%       t_std_diff  - Sample standard deviation of IEIs. Zero for
+%                     pixels with fewer than three events (fewer than
+%                     two IEIs).
 %
-%   Algorithm:
-%     All six outputs are computed without per-pixel loops by
-%     exploiting the pre-sorted group structure of sorted_t:
-%       1. min/max — direct indexing into group boundaries
-%          (sorted_t is monotonic within each group).
-%       2. mean — prefix-sum (cumsum) subtraction per group.
-%       3. std  — prefix-sum of squared timestamps, then the
-%          algebraic identity var(x) = E[x^2] - E[x]^2
-%          with Bessel correction.
-%       4. IEI mean — telescoping sum identity:
-%          mean(diff(x)) = (x(end) - x(1)) / (n - 1).
-%       5. IEI std — diff all of sorted_t in one pass, mask
-%          out cross-group boundaries, then accumarray to
-%          scatter sum(d^2) per group.
+%     Notes:
+%       Fully vectorized; no per-pixel loops. Min/max are read from
+%       group boundaries; means use prefix-sum (cumsum) subtraction;
+%       standard deviations use the one-pass identity
+%       var(x) = E[x^2] - E[x]^2 with Bessel correction; the IEI mean
+%       uses the telescoping identity
+%       mean(diff(x)) = (x(end) - x(1)) / (n - 1); IEI squared sums are
+%       scattered per group with accumarray after masking diffs that
+%       cross group boundaries.
 %
-%   Notes:
-%     - Input vectors must be pre-sorted by
-%       stats.spreadEventsSpatially or equivalent grouping.
-%     - Pixels with a single event get t_mean_diff = 0 and
-%       t_std_diff = 0 (no interval observable).
-%     - Pixels with two or fewer events get t_std_diff = 0
-%       (need >= 2 IEIs for a sample standard deviation).
-%     - The t_mean_diff output is the primary input to the
-%       coherence IEI regularity rule and (via EMA smoothing)
-%       the IEI-ATS accumulator tau mapping.
-%     - The one-pass variance formula (E[x^2] - E[x]^2) can
-%       suffer from catastrophic cancellation when absolute
-%       values are large relative to the spread (Higham 2002,
-%       Ch. 1). This is not an issue here because timestamps
-%       are relative within each frame window, keeping
-%       magnitudes moderate. A max(..., 0) guard clamps any
-%       negative values caused by floating-point noise.
+%       The one-pass variance formula can suffer catastrophic
+%       cancellation when magnitudes are large relative to spread
+%       (Higham 2002, "Accuracy and Stability of Numerical Algorithms,"
+%       2nd ed., Ch. 1). Timestamps here are window-relative, keeping
+%       magnitudes moderate; a max(., 0) clamp guards residual
+%       floating-point noise.
 %
-%   See also: stats.spreadEventsSpatially,
-%             coherence.computeCoherenceMask
+%       t_mean_diff feeds the coherence IEI regularity rule and, via
+%       EMA smoothing, the IEI-ATS per-pixel tau mapping.
+%
+%     See also COHERENCE.COMPUTECOHERENCEMASK.
 
     % ----------------------------------------------------------------
     % 0. Initialize output maps

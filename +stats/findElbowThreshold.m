@@ -1,105 +1,96 @@
 function [auto_threshold, diagnostics] = findElbowThreshold(score_map, varargin)
-% FINDELBOWTHRESHOLD  Data-driven threshold via geometric elbow detection.
+% FINDELBOWTHRESHOLD Data-driven threshold selection via geometric elbow (Kneedle) detection on a local binary variance curve.
 %
-%   AUTO_THRESHOLD = FINDELBOWTHRESHOLD(SCORE_MAP) sweeps candidate
-%   thresholds over SCORE_MAP, computes the mean local binary
-%   variance of the surviving pixel mask at each threshold, and
-%   returns the threshold at the geometric elbow of the resulting
-%   curve. The elbow is defined as the point of maximum perpendicular
-%   distance from the chord connecting the curve endpoints after
-%   normalizing both axes to [0, 1], following the Kneedle
-%   convention [1].
+%     auto_threshold = findElbowThreshold(score_map) sweeps candidate
+%     thresholds over the nonzero values of score_map, computes the
+%     mean local binary variance (LBV) of the surviving pixel mask at
+%     each threshold, and returns the threshold at the geometric elbow
+%     of the curve: the point of maximum perpendicular distance from
+%     the chord joining the curve endpoints after normalizing both
+%     axes to [0, 1], following the Kneedle convention [1].
 %
-%   The local binary variance at each pixel is p(1-p), where p is
-%   the fraction of active pixels within a local window. This is
-%   computed via a single conv2 call per threshold — no KD-trees or
-%   nearest-neighbour searches. It captures local spatial clustering:
-%   mixed noise-and-signal regions produce high p(1-p) while
-%   homogeneous regions (pure cluster or pure background) produce
-%   values near zero. The mean across the image summarizes the
-%   overall degree of spatial mixing at each threshold level.
+%     [auto_threshold, diagnostics] = findElbowThreshold(...) also
+%     returns a struct for inspection and plotting.
 %
-%   Dense-scene handling: LBV = p(1-p) is symmetric about p = 0.5.
-%   When the initial fill fraction is high (dense scene), the LBV
-%   curve rises from near-zero (p ≈ 1) to a peak at ~50% pixel
-%   survival, then falls. Only the descending portion carries the
-%   noise-to-signal transition information. The function detects
-%   the LBV peak and truncates the curve to the descending portion
-%   before applying Kneedle, ensuring monotonicity regardless of
-%   initial scene density.
+%     [...] = findElbowThreshold(score_map, 'Name', Value) accepts:
+%       'NumThresholds' - (50) Number of candidate thresholds.
+%       'WinHalfSize'   - (5) Local window half-size in pixels, giving
+%                         a (2*WinHalfSize+1)^2 box window.
+%       'UpperBound'    - (false) If true, also compute an upper
+%                         threshold (hot-pixel rejection) by repeating
+%                         the procedure on the flipped score axis,
+%                         using only pixels surviving the lower
+%                         threshold.
 %
-%   [AUTO_THRESHOLD, DIAGNOSTICS] = FINDELBOWTHRESHOLD(SCORE_MAP)
-%   also returns a struct for inspection and plotting.
+%     Inputs:
+%       score_map - [H x W] Map of per-pixel scores (numeric). Zero
+%                   and NaN entries are inactive.
 %
-%   [...] = FINDELBOWTHRESHOLD(SCORE_MAP, 'Name', Value) accepts
-%   optional name-value arguments:
-%     'NumThresholds' - (50) Number of candidate thresholds.
-%     'WinHalfSize'   - (5) Local window half-size in pixels,
-%                        giving an (2*WinHalfSize+1)^2 window.
-%     'UpperBound'    - (false) If true, also compute an upper
-%                        threshold to reject hot pixels (values
-%                        that are too persistent). The upper pass
-%                        operates only on pixels surviving the
-%                        lower threshold.
+%     Outputs:
+%       auto_threshold - Scalar lower threshold at the elbow. NaN if
+%                        fewer than 10 active pixels. If 'UpperBound'
+%                        is true, a [1 x 2] vector [th_lo, th_hi];
+%                        th_hi is NaN when the upper pass is
+%                        degenerate (too few survivors, no elbow, or
+%                        th_hi <= th_lo).
+%       diagnostics    - Struct with fields:
+%         .th_vec        - [1 x M] Thresholds after peak truncation
+%                          and zero-LBV pruning (ascending).
+%         .mean_lbv      - [1 x M] Mean LBV at those thresholds.
+%         .th_norm       - [1 x M] Thresholds normalized to [0, 1].
+%         .lbv_norm      - [1 x M] LBV normalized to [0, 1].
+%         .perp_dist     - [1 x M] Perpendicular distance from chord.
+%         .elbow_idx     - Index of the elbow into the vectors above.
+%         .peak_idx      - Index of the LBV peak in the full sweep;
+%                          1 means the curve was already decreasing
+%                          (sparse scene, nothing truncated).
+%         .full_th_vec   - [1 x NumThresholds] Full sweep, before
+%                          truncation, for diagnostic plotting.
+%         .full_mean_lbv - [1 x NumThresholds] Full LBV curve.
+%         .upper         - (Only if 'UpperBound' is true) Struct with
+%                          the same fields computed on the flipped
+%                          axis, plus: .degenerate (logical),
+%                          .th_vec_original and .mean_lbv_original
+%                          (curve mapped back to the original score
+%                          axis). Degenerate upper passes contain
+%                          only .degenerate.
 %
-%   Inputs:
-%     score_map - [H x W] 2D map of per-pixel scores (single or
-%                 double). Zero and NaN entries are inactive.
+%     Algorithm:
+%       1. Build a linearly spaced sweep over [min, max] of the
+%          active (nonzero, non-NaN) score values.
+%       2. At each threshold, binarize the map (>= th) and compute
+%          local active fraction p via box filtering with imfilter
+%          (replicate boundary).
+%       3. Mean LBV = mean of p.*(1-p) over the ACTIVE pixels of
+%          score_map (not the full image).
+%       4. LBV = p(1-p) is symmetric about p = 0.5, so dense scenes
+%          produce a rising-then-falling curve. The curve is
+%          truncated to the descending portion from its peak so that
+%          Kneedle sees a monotonic curve; sparse scenes are already
+%          monotonic (peak_idx == 1).
+%       5. All zero-LBV samples (typically the flat tail) are
+%          removed, both axes are normalized to [0, 1], and the
+%          elbow is the maximum perpendicular distance from the
+%          chord.
 %
-%   Outputs:
-%     auto_threshold - Scalar lower threshold at the geometric
-%                      elbow. If 'UpperBound' is true, this is a
-%                      [1 x 2] vector: [th_lo, th_hi].
-%     diagnostics    - Struct with fields:
-%       .th_vec       - [1 x M] Candidate thresholds (ascending,
-%                       after truncation).
-%       .mean_lbv     - [1 x M] Mean local binary variance (after
-%                       truncation).
-%       .th_norm      - [1 x M] Thresholds normalized to [0, 1].
-%       .lbv_norm     - [1 x M] LBV normalized to [0, 1].
-%       .perp_dist    - [1 x M] Perpendicular distance from chord.
-%       .elbow_idx    - Index into the vectors above.
-%       .peak_idx     - Index of the LBV peak in the *full* sweep
-%                       (before truncation). peak_idx == 1 means
-%                       the curve was already monotonically
-%                       decreasing (sparse scene).
-%       .full_th_vec  - [1 x N_TH] Full threshold sweep (before
-%                       truncation), for diagnostic plotting.
-%       .full_mean_lbv- [1 x N_TH] Full LBV curve (before
-%                       truncation), for diagnostic plotting.
-%       .upper        - (Only if 'UpperBound' is true) Struct with
-%                       the same fields, computed on the flipped
-%                       score axis for the upper pass.
+%     Notes:
+%       If fewer than 3 nonzero-LBV samples remain, or either
+%       normalized axis has zero range, the midpoint threshold of the
+%       remaining sweep is returned and diagnostics contain only
+%       peak_idx, full_th_vec, and full_mean_lbv.
 %
-%   Algorithm:
-%     1. Extract unique nonzero score values and build a linearly
-%        spaced sweep vector from min to max.
-%     2. At each candidate threshold, binarize the map (>= th).
-%     3. Compute local density p via box-filter convolution:
-%          p = conv2(mask, kernel, 'same') / numel(kernel)
-%     4. Mean local binary variance = mean(p .* (1 - p)) over
-%        the full image.
-%     5. Find the LBV peak. If peak_idx > 1 (dense scene), truncate
-%        the curve to the descending portion [peak_idx : end].
-%        If peak_idx == 1, the curve is already monotonic.
-%     6. Prune flat trailing regions (LBV == 0).
-%     7. Normalize both axes to [0, 1] and find the elbow
-%        (max perpendicular distance from chord).
+%       Cost is O(NumThresholds x H x W) dominated by the box
+%       filters; 'UpperBound' roughly doubles it.
 %
-%   Computational cost:
-%     O(N_TH x H x W) via conv2. For 640 x 480 with N_TH = 50:
-%     ~50 convolutions, typically < 10 ms total in MATLAB.
-%     Upper bound adds another ~50 convolutions on sparser data.
+%     References:
+%       [1] V. Satopaa, J. Albrecht, D. Irwin, and B. Raghavan,
+%           "Finding a 'Kneedle' in a Haystack: Detecting Knee Points
+%           in System Behavior," Proc. 31st Int. Conf. Distributed
+%           Computing Systems Workshops, pp. 166-171, 2011.
+%           DOI: 10.1109/ICDCSW.2011.20
 %
-%   References:
-%     [1] V. Satopaa, J. Albrecht, D. Irwin, and B. Raghavan,
-%         "Finding a 'Kneedle' in a Haystack: Detecting Knee Points
-%         in System Behavior," Proc. 31st Int. Conf. Distributed
-%         Computing Systems Workshops, pp. 166-171, 2011.
-%         DOI: 10.1109/ICDCSW.2011.20
-%
-%   See also: conv2, coherence.computeCoherenceMask,
-%             plot.plotElbowDiagnostics
+%     See also IMFILTER, COHERENCE.COMPUTECOHERENCEMASK,
+%       PLOT.PLOTELBOWDIAGNOSTICS.
 
     % ----------------------------------------------------------------
     % 0. Parse arguments

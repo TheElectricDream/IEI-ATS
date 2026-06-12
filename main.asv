@@ -27,10 +27,9 @@ if isLooping == false
 
     % Set dataset name
     %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-    %fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+    fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
     %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
     %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
-    fileName = 'recording_20251029_153226.hdf5';  % EVOS - NOM - CC+ROT
     %fileName = 'ZED-ROT-NOM.h5';
     %fileName = 'ZED-ROT-NOM-SLOWMO.h5';
 
@@ -120,11 +119,11 @@ imgSz                       = [640, 480];
 % Set the plotting frame for journal paper figures
 genFigures                  = true;  % Slows down code
 
-% plottingFrame               = 205;  % 205 For Nominal Lighting
-% plottingType                = '-NOM';
+plottingFrame               = 205;  % 205 For Nominal Lighting
+plottingType                = '-NOM';
 
-plottingFrame               = 179;  % For High Glare
-plottingType                = '-SG';
+% plottingFrame               = 179;  % For High Glare
+% plottingType                = '-SG';
 
 % plottingFrame               = 181;  % For Low Light
 % plottingType                = '-DARK';
@@ -903,42 +902,18 @@ for frameIndex = 1:frame_total
         % Create the filter
         filter_mask = filtered_coherence_map;
         filter_mask(isnan(filter_mask)) = 0;
-        filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
+        filter_mask = single(imgaussfilt(single(filter_mask), 2.0, "FilterSize", 3));
         
         % Use the Kneedle algorithm to find a suitable threshold
         % Downsample filter_mask from 640x480 to 320x240 before thresholding
         % Assume imgSz corresponds to original size; compute target size half in each dim
-        %targetSz = ceil(imgSz / 2);
+        targetSz = ceil(imgSz / 2);
         % Use imresize to downsample (preserve range); convert to single for processing
-        %ds_mask = imresize(single(filter_mask), targetSz, 'bilinear');
-        %[th_lo, diag] = stats.findElbowThreshold(ds_mask,'WinHalfSize', 21,'NumThresholds', 100);
-
-        [th_lo, diag] = testing.rosinThreshold(filter_mask);
+        ds_mask = imresize(single(filter_mask), targetSz, 'bilinear');
+        [th_lo, diag] = stats.findElbowThreshold(ds_mask,'WinHalfSize', 21,'NumThresholds', 100);
 
         % Use the threshold on the mask & log the result
         filter_mask(filter_mask < th_lo) = 0;
-        filtered_coherence_map = filtered_coherence_map.*filter_mask;
-        Z = filter_mask;
-
-        [dz_dy, dz_dx] = gradient(Z);  % dz_dy = dZ/dy (rows), dz_dx = dZ/dx (cols)
-
-        % If the physical spacing in x and y is not 1, use:
-        % [dz_dy, dz_dx] = gradient(Z, dy, dx);
-
-        % Compute gradient magnitude and normal vectors for the surface z = Z(x,y).
-        grad_mag = sqrt(dz_dx.^2 + dz_dy.^2);
-
-        % Surface normals (unnormalized): n = [-dz_dx; -dz_dy; 1]
-        nx = -dz_dx;
-        ny = -dz_dy;
-        nz = ones(size(Z));
-        n_norm = sqrt(nx.^2 + ny.^2 + nz.^2);
-        nx = nx ./ n_norm;
-        ny = ny ./ n_norm;
-        nz = nz ./ n_norm;
-
-        %plot.showImageAsVideo(grad_mag');
-
         % filter_mask = filter_mask.*filtered_coherence_map;
         % 
         % test = filter_mask.*filtered_coherence_map;
@@ -1062,15 +1037,7 @@ for frameIndex = 1:frame_total
         % Accumulate polarity into a 2D grid
         % If multiple events land on one pixel, we sum their polarities 
         polarity_map = accumarray([filtered_x, filtered_y], p_signed, imgSz, @sum, 0);
-        %polarity_map = polarity_map.*filter_mask;
-        test1 = polarity_map;
-        test2 = test1;
-        [th_up, ~] = testing.rosinThreshold(test2);
-        test2(test2<th_up)=-5;
-        test3 = test1;
-        [th_down, ~] = testing.rosinThreshold(-test3);
-        test3(test3>-th_down)=5;
-        polarity_map = test2+test3;
+        polarity_map = polarity_map.*filter_mask;
     
         [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
         accumulator.localAdaptiveTimeSurface(iei_map,...
