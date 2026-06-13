@@ -12,7 +12,7 @@ if isLooping == false
     close all;
 
     % Use buffered data
-    useBuffer = false;
+    useBuffer = true;
     
     % Select algorithms for filtering and accumulation
     % Set 'None' for filter selection to skip filtering entirely
@@ -27,10 +27,10 @@ if isLooping == false
 
     % Set dataset name
     %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-    %fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+    fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
     %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
     %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
-    fileName = 'recording_20251029_153226.hdf5';  % EVOS - NOM - CC+ROT
+    %fileName = 'recording_20251029_153226.hdf5';  % EVOS - NOM - CC+ROT
     %fileName = 'ZED-ROT-NOM.h5';
     %fileName = 'ZED-ROT-NOM-SLOWMO.h5';
 
@@ -120,11 +120,11 @@ imgSz                       = [640, 480];
 % Set the plotting frame for journal paper figures
 genFigures                  = true;  % Slows down code
 
-% plottingFrame               = 205;  % 205 For Nominal Lighting
-% plottingType                = '-NOM';
+plottingFrame               = 205;  % 205 For Nominal Lighting
+plottingType                = '-NOM';
 
-plottingFrame               = 179;  % For High Glare
-plottingType                = '-SG';
+% plottingFrame               = 179;  % For High Glare
+% plottingType                = '-SG';
 
 % plottingFrame               = 181;  % For Low Light
 % plottingType                = '-DARK';
@@ -371,7 +371,7 @@ stcc_n_total_store          = zeros(1, frame_total);
 % -------------------------------------------------------------------------
 % Tuning Guide:
 
-coh_params.iei_alpha        = 0.8; 
+coh_params.iei_alpha        = 0.1; 
 coh_params.r_s              = 30/imgSz(1);
 filter_mask                 = ones(imgSz);
 iei_map                     = zeros(imgSz);
@@ -704,6 +704,13 @@ elbowDiagnostics = {};
 % display-ready output for metrics comparison.
 prev_output_for_metrics = zeros(imgSz);
 
+% Initialize IEI
+iei = struct('mean',  zeros(imgSz), ...
+             'var',   zeros(imgSz), ...
+             'valid', false(imgSz), ...
+             'tp1',   nan(imgSz), ...
+             'tp2',   nan(imgSz));
+
 %% Data processing starting point
 % Loop through the figures to capture each frame
 for frameIndex = 1:frame_total 
@@ -797,12 +804,14 @@ for frameIndex = 1:frame_total
         stats.computeNeighborhoodStats(sorted_t, unique_idx, pos, ...
         group_ends, imgSz);
 
-    % Update a persistant map of the inter-event interval so that sparse
-    % data is retained
-    new_obs_mask = (t_mean_diff > 0); 
-    % iei_map(new_obs_mask) = (1 - coh_params.iei_alpha) .* iei_map(new_obs_mask) +...
-    %     coh_params.iei_alpha .* t_mean_diff(new_obs_mask);
-    iei_map = t_mean_diff;
+    % Second-to-last timestamp per pixel (valid where counts >= 2)
+    t_2last = zeros(imgSz);
+    v2 = (group_ends - pos) >= 1;
+    t_2last(unique_idx(v2)) = sorted_t(group_ends(v2) - 1);
+
+    % Per-pixel windowed IEI with minimal fixed-count backfill
+    iei = stats.updateWindowedIEI(iei, t_mean_diff, t_std_diff, ...
+        t_min, t_2last, t_max, counts);
 
     % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
     % =========================== FILTERING ==============================%
@@ -893,8 +902,8 @@ for frameIndex = 1:frame_total
             filtered_coherence_map, hot_pixel_accumulator, aperiodic_mask,...
             persistent_hot_mask, global_hot_mask] = filters.computeCoherenceMask(sorted_x,...
             sorted_y, sorted_t, imgSz, t_interval, coh_params, frameIndex, ...
-            norm_trace_map_prev, t_std_diff,...
-            t_mean_diff, counts, hot_pixel_accumulator, plottingFrame,...
+            norm_trace_map_prev, sqrt(iei.var),...
+            iei.mean, counts, hot_pixel_accumulator, plottingFrame,...
             genFigures, plottingType, global_hot_mask);
 
         % Set any retention variables
@@ -1063,17 +1072,17 @@ for frameIndex = 1:frame_total
         % If multiple events land on one pixel, we sum their polarities 
         polarity_map = accumarray([filtered_x, filtered_y], p_signed, imgSz, @sum, 0);
         %polarity_map = polarity_map.*filter_mask;
-        test1 = polarity_map;
-        test2 = test1;
-        [th_up, ~] = testing.rosinThreshold(test2);
-        test2(test2<th_up)=-5;
-        test3 = test1;
-        [th_down, ~] = testing.rosinThreshold(-test3);
-        test3(test3>-th_down)=5;
-        polarity_map = test2+test3;
+        % test1 = polarity_map;
+        % test2 = test1;
+        % [th_up, ~] = testing.rosinThreshold(test2);
+        % test2(test2<th_up)=-5;
+        % test3 = test1;
+        % [th_down, ~] = testing.rosinThreshold(-test3);
+        % test3(test3>-th_down)=5;
+        % polarity_map = test2+test3;
     
         [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
-        accumulator.localAdaptiveTimeSurface(iei_map,...
+        accumulator.localAdaptiveTimeSurface(iei.mean,...
         time_surface_map_prev, alts_params, filter_mask, polarity_map, counts);
     
         % Set any retention variables

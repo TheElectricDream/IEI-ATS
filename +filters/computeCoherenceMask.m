@@ -14,38 +14,32 @@ function [norm_trace_map, norm_similarity_map, ...
     % ----------------------------------------------------------------
     % 2. Rule 1 — IEI regularity (regularity map)
     % ----------------------------------------------------------------
-    [~, ~, norm_similarity_map] = filters.findSimilarities(...
+    % Capture cv_map (2nd output) — the UN-gated irregularity.
+    [~, cv_map, norm_similarity_map] = filters.findSimilarities( ...
         sorted_x, sorted_y, std_map, mean_map, imgSz);
     norm_similarity_map(isnan(norm_similarity_map)) = 0;
-
-    % ----------------------------------------------------------------
-    % Hot Pixel Removal
-    % ----------------------------------------------------------------
-    % 1. Define the "Poisson Band" 
-    % A CV between 0.8 and 1.25 yields a regularity score between ~0.44 and ~0.55.
-    poisson_mask = (norm_similarity_map > 0.0) & (norm_similarity_map < 0.8);
-    aperiodic_mask = poisson_mask;
     
-    % 2. Isolate hyperactivity
-    % We only care about the event counts of pixels that lack temporal structure
-    poisson_counts = counts(poisson_mask);
+    % --- Aperiodic = super-Poisson irregularity, observed pixels only ---
+    % LV = 1.5*CV^2, so LV > 1 (Shinomoto Poisson line) <=> CV > 0.816.
+    % This is the UN-gated irregularity: slow-but-regular pixels (which the
+    % magnitude gate also drove to low combined score) are correctly NOT
+    % flagged here, because their CV is small.
+    obs_mask       = mean_map > 0;
+    aperiodic_mask = obs_mask & (cv_map > 0.4);   % == LV > 1
     
-    if ~isempty(poisson_counts) && length(poisson_counts) > 10
-        
-        count_th = median(poisson_counts) + 5 * mad(poisson_counts, 1);
-        current_hot_mask = poisson_mask & (counts > count_th);
-
+    % --- Hyperactive = abnormally high count among aperiodic pixels ------
+    poisson_counts = counts(aperiodic_mask);
+    if nnz(aperiodic_mask) > 10
+        count_th         = median(poisson_counts) + 5 * mad(poisson_counts, 1);
+        current_hot_mask = aperiodic_mask & (counts > count_th);
+    else
+        current_hot_mask = aperiodic_mask;
     end
-        
-    % 2. Update the Leaky Bucket Memory
-    % Add current flags, then decay by 10% (multiply by 0.9). 
-    % A consistent hot pixel will accumulate up to ~10.0 over time.
-    hot_pixel_accumulator = (hot_pixel_accumulator + current_hot_mask) * 0.90;
     
-    % 3. Define the Persistent Hot Mask
-    % If a pixel's accumulator is > 2.0, it has been flagged in at least 
-    % 3 recent frames. It is considered a confirmed hardware defect.
-    persistent_hot_mask = hot_pixel_accumulator > 3.0;
+    % --- Leaky bucket + persistence: UNCHANGED --------------------------
+    hot_pixel_accumulator = (hot_pixel_accumulator + current_hot_mask) * 0.90;
+    persistent_hot_mask   = hot_pixel_accumulator > 3.0;
+
 
     if frameIndex == 1
         global_hot_mask = persistent_hot_mask;
