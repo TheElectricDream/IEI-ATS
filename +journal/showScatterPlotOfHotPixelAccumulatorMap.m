@@ -10,7 +10,7 @@ function [] = showScatterPlotOfHotPixelAccumulatorMap(map, name, show)
 
     % --- Threshold Configuration ---
     % Only an upper bound is used to define the hot-pixel region.
-    z_hot_upper = 0.8; % Upper bound of the hot pixel region
+    z_hot_upper = 0.6; % Upper bound of the hot pixel region
     
     [pointCloud] = process.generateMeshFromFrame(map');
     x_trimmed = pointCloud(~isnan(pointCloud(:,3)), 1)./640;
@@ -42,12 +42,12 @@ function [] = showScatterPlotOfHotPixelAccumulatorMap(map, name, show)
     hAbove = [];
     
     % 1. Nominal Region (Faint Red) - everything below the upper bound
-    if z_min_data < z_hot_upper
+    if z_min_data > z_hot_upper
         hBelow = drawFaintCube(ax, x_bounds, y_bounds, [z_min_data, min(z_hot_upper, z_max_data)], 'r', 0.05);
     end
     
     % 2. Hot Pixel Region (Faint Green) - above the upper bound up to data max
-    if z_max_data > z_hot_upper
+    if z_max_data < z_hot_upper
         hAbove = drawFaintCube(ax, x_bounds, y_bounds, [z_hot_upper, z_max_data], 'g', 0.03);
     end
 
@@ -56,7 +56,7 @@ function [] = showScatterPlotOfHotPixelAccumulatorMap(map, name, show)
     pointColors = repmat([0.85 0.15 0.15], length(z_trimmed), 1); 
     
     % Create a logical mask for points that are above the hot pixel upper bound
-    isHotPixel = (z_trimmed > z_hot_upper);
+    isHotPixel = (z_trimmed < z_hot_upper);
     
     % Overwrite the color for hot pixels to a distinct green
     pointColors(isHotPixel, :) = repmat([0.15 0.7 0.15], sum(isHotPixel), 1);

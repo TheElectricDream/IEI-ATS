@@ -1,54 +1,44 @@
-function [norm_trace_map, norm_similarity_map, ...
+function [norm_trace_map, norm_trace_map_nofilt, norm_regularity_map, ...
     norm_persist_map, norm_coherence_map, hot_pixel_accumulator,...
-    aperiodic_mask, persistent_hot_mask, global_hot_mask] = ...
+    aperiodic_mask, local_hot_mask, global_hot_mask] = ...
     computeCoherenceMask(sorted_x, sorted_y, sorted_t, imgSz, ...
     t_interval, coh_params, ...
     frameIndex, norm_trace_map_prev, std_map, mean_map, counts, hot_pixel_accumulator, ...
-    plottingFrame, genFigure, plottingType, global_hot_mask)
+    genFigure, global_hot_mask)
 
     % ----------------------------------------------------------------
     % 0. Parse parameters
     % ----------------------------------------------------------------
     r_s                   = coh_params.r_s;
+    s_bnd                 = coh_params.s_bnd;
+    hpa_decay             = coh_params.hpa_decay;
+    hpa_bnd               = coh_params.hpa_bnd;
 
     % ----------------------------------------------------------------
-    % 2. Rule 1 — IEI regularity (regularity map)
+    % 1. Rule 1 — IEI regularity (regularity map)
     % ----------------------------------------------------------------
-    % Capture cv_map (2nd output) — the UN-gated irregularity.
-    [~, cv_map, norm_similarity_map] = filters.findSimilarities( ...
+    [~, ~, norm_regularity_map] = filters.findRegularity( ...
         sorted_x, sorted_y, std_map, mean_map, imgSz);
-    norm_similarity_map(isnan(norm_similarity_map)) = 0;
-    
-    % --- Aperiodic = super-Poisson irregularity, observed pixels only ---
-    % LV = 1.5*CV^2, so LV > 1 (Shinomoto Poisson line) <=> CV > 0.816.
-    % This is the UN-gated irregularity: slow-but-regular pixels (which the
-    % magnitude gate also drove to low combined score) are correctly NOT
-    % flagged here, because their CV is small.
-    obs_mask       = mean_map > 0;
-    aperiodic_mask = obs_mask & (cv_map > 0.4);   % == LV > 1
-    
-    % --- Hyperactive = abnormally high count among aperiodic pixels ------
-    poisson_counts = counts(aperiodic_mask);
-    if nnz(aperiodic_mask) > 10
-        count_th         = median(poisson_counts) + 5 * mad(poisson_counts, 1);
-        current_hot_mask = aperiodic_mask & (counts > count_th);
-    else
-        current_hot_mask = aperiodic_mask;
-    end
-    
-    % --- Leaky bucket + persistence: UNCHANGED --------------------------
-    hot_pixel_accumulator = (hot_pixel_accumulator + current_hot_mask) * 0.90;
-    persistent_hot_mask   = hot_pixel_accumulator > 3.0;
 
+    % handle zeros and inf
+    norm_regularity_map(isnan(norm_regularity_map)) = 0;
+    norm_regularity_map(norm_regularity_map==0)=inf;
+    
+    % Generate the aperiodic map
+    aperiodic_mask = (norm_regularity_map <= s_bnd); 
+        
+    % Leaky-bucket for persistent tracking
+    hot_pixel_accumulator = (hot_pixel_accumulator + aperiodic_mask).*hpa_decay;
+    local_hot_mask   = hot_pixel_accumulator >= hpa_bnd;
 
     if frameIndex == 1
-        global_hot_mask = persistent_hot_mask;
+        global_hot_mask = local_hot_mask;
     else
-        global_hot_mask = global_hot_mask | persistent_hot_mask;
+        global_hot_mask = global_hot_mask | local_hot_mask;
     end
     
     % 4. Strip the defective pixels globally
-    hot_pixel_idx = find(persistent_hot_mask);
+    hot_pixel_idx = find(local_hot_mask);
 
     filtered_x = sorted_x;
     filtered_y = sorted_y;
@@ -66,41 +56,48 @@ function [norm_trace_map, norm_similarity_map, ...
     end
 
     % ----------------------------------------------------------------
-    % 1. Rule 2 - Spatial density (trace map)
+    % 2. Rule 2 - Spatial density (trace map) - Unfiltered
     % ----------------------------------------------------------------
 
-    if frameIndex == plottingFrame && genFigure
-
+    if genFigure
         % Temporal binning at pixel-equivalent resolution
-        Nt = max(round(t_interval / (r_s * t_interval)), 1);
-        tb = min(floor(Nt * (sorted_t - min(sorted_t)) / t_interval) + 1, Nt);
-
+        Nt_nofilt = max(round(t_interval / (r_s * t_interval)), 1);
+        tb_nofilt = min(floor(Nt_nofilt * (sorted_t - min(sorted_t)) / t_interval) + 1, Nt_nofilt);
+    
         % 3D event histogram at full spatial resolution
-        V = accumarray([sorted_x, sorted_y, tb], 1, [imgSz(1) imgSz(2) Nt]);
-
-        kr_x = round(r_s * imgSz(1));
-        kr_y = round(r_s * imgSz(2));
-        kr_t = round(r_s * Nt);
-
-        [kx, ky, kt] = ndgrid(-kr_x:kr_x, -kr_y:kr_y, -kr_t:kr_t);
-
+        V_nofilt = accumarray([sorted_x, sorted_y, tb_nofilt], 1, [imgSz(1) imgSz(2) Nt_nofilt]);
+    
+        kr_x_nofilt = round(r_s * imgSz(1));
+        kr_y_nofilt = round(r_s * imgSz(2));
+        kr_t_nofilt = round(r_s * Nt_nofilt);
+    
+        [kx_nofilt, ky_nofilt, kt_nofilt] = ndgrid(-kr_x_nofilt:kr_x_nofilt,...
+            -kr_y_nofilt:kr_y_nofilt, -kr_t_nofilt:kr_t_nofilt);
+    
         % Normalize kernel indices back to the same units as the point cloud
-        K_dist = sqrt((kx/imgSz(1)).^2 + (ky/imgSz(2)).^2 + (kt/Nt).^2);
-        K = double(K_dist <= r_s); % 1 inside the ball, 0 outside
-
-        density = convn(V, K, 'same');
-
+        K_dist_nofilt = sqrt((kx_nofilt/imgSz(1)).^2 + (ky_nofilt/imgSz(2)).^2 + (kt_nofilt/Nt_nofilt).^2);
+        K_nofilt = double(K_dist_nofilt <= r_s); % 1 inside the ball, 0 outside
+    
+        density = convn(V_nofilt, K_nofilt, 'same');
+    
         % Sample per-event, then max per-pixel
-        sum_exp_dist = density(sub2ind(size(V), sorted_x, sorted_y, tb));
-
-        sum_exp_dist_map = accumarray([sorted_x, sorted_y], sum_exp_dist, imgSz, @max, 0);
-
+        sum_exp_dist_nofilt = density(sub2ind(size(V_nofilt), sorted_x, sorted_y, tb_nofilt));
+    
+        sum_exp_dist_map_nofilt = accumarray([sorted_x, sorted_y], sum_exp_dist_nofilt, imgSz, @max, 0);
+    
         % Log-normalize to compress the heavy-tailed distribution
-        log_trace_map = log1p(sum_exp_dist_map');
-        norm_trace_map = log_trace_map' ./ max(log_trace_map(:));
+        log_trace_map_nofilt = log1p(sum_exp_dist_map_nofilt');
+        norm_trace_map_nofilt = log_trace_map_nofilt' ./ max(log_trace_map_nofilt(:));
 
-        journal.showScatterPlotOfRuleMaps3D(norm_trace_map,['Norm-Trace-Map-Sample-Density-w-Hot-Pixels-Nominal-Rot' plottingType '-3D.pdf'], false)
+    else
+
+        norm_trace_map_nofilt = zeros(size(norm_regularity_map));
+
     end
+
+    % ----------------------------------------------------------------
+    % 3. Rule 2 - Spatial density (trace map) - Filtered
+    % ----------------------------------------------------------------
 
     % Temporal binning at pixel-equivalent resolution
     Nt = max(round(t_interval / (r_s * t_interval)), 1);
@@ -131,7 +128,7 @@ function [norm_trace_map, norm_similarity_map, ...
     norm_trace_map = log_trace_map' ./ max(log_trace_map(:));
 
     % ----------------------------------------------------------------
-    % 3. Rule 2 — Temporal persistence
+    % 4. Rule 3 — Temporal persistence
     % ----------------------------------------------------------------
     if frameIndex == 1
         % No previous frame available — use trace map as proxy
@@ -157,15 +154,8 @@ function [norm_trace_map, norm_similarity_map, ...
     norm_persist_map = log_persist_map ./ max(log_persist_map(:));
 
     % ----------------------------------------------------------------
-    % 4. Combine rule maps
+    % 5. Combine rule maps
     % ----------------------------------------------------------------
-    % [th_lo_trace, ~] = stats.findElbowThreshold(norm_trace_map,500);
-    % [th_lo_persist, ~] = stats.findElbowThreshold(norm_persist_map,500);
-    % [th_lo_sim, ~] = stats.findElbowThreshold(norm_similarity_map,500);
-    % 
-    % norm_trace_map(norm_trace_map < th_lo_trace) = 0;
-    % norm_persist_map(norm_persist_map < th_lo_persist) = 0;
-    % norm_similarity_map(norm_similarity_map < th_lo_sim) = 0;
 
     filtered_coherence_map = norm_trace_map ...
         .* norm_persist_map;

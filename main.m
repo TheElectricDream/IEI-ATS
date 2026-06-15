@@ -370,11 +370,15 @@ stcc_n_total_store          = zeros(1, frame_total);
 % REF: TBD
 % -------------------------------------------------------------------------
 % Tuning Guide:
+ 
+coh_params.r_s              = 30/imgSz(1);  % Density kernal diameter
+coh_params.s_bnd            = 0.5506;  % Regularity bound 
+coh_params.hpa_decay        = 0.9;  % Decay per frame for HPA calculation
+coh_params.hpa_bnd          = 6;  % Number of warm-up frames before statistcs are valid
+coh_params.K_buf_size       = 1;  % Number of events to hold in buffer for IEI
 
-coh_params.iei_alpha        = 0.1; 
-coh_params.r_s              = 30/imgSz(1);
+
 filter_mask                 = ones(imgSz);
-iei_map                     = zeros(imgSz);
 global_hot_mask             = zeros(imgSz);
 
 %% Initialize Accumulator Parameters
@@ -683,20 +687,34 @@ norm_trace_map_prev     = zeros(imgSz);
 time_surface_map_prev   = zeros(imgSz);
 hot_pixel_accumulator   = zeros(imgSz);
 
-% Pre-allocate metrics storage.
-frame_metrics.SRR                  = zeros(1, frame_total);
-frame_metrics.ClarkEvansRemoved    = zeros(1, frame_total);
-frame_metrics.ClarkEvansRemaining  = zeros(1, frame_total);
-frame_metrics.ComputeTimeFilter    = zeros(1, frame_total);
-frame_metrics.ComputeTimeAccumulator = zeros(1, frame_total);
-frame_metrics.EventsInFrame        = zeros(1, frame_total);
-frame_metrics.FilteredEvents       = zeros(1, frame_total);
-frame_metrics.FilteringMEVs        = zeros(1, frame_total);
-frame_metrics.AccumulatorMEVs      = zeros(1, frame_total);
-frame_metrics.HotPixelCount        = zeros(1, frame_total);
-frame_metrics.HotPixelThresh       = zeros(1, frame_total);
+%% Initialize chunked data storage
+chunk_size = 100; % Adjust this based on your available RAM
+chunk_idx = 1;
 
-elbowDiagnostics = {};
+% Pre-allocate metrics storage for JUST ONE CHUNK.
+frame_metrics.SRR                    = zeros(1, chunk_size);
+frame_metrics.ClarkEvansRemoved      = zeros(1, chunk_size);
+frame_metrics.ClarkEvansRemaining    = zeros(1, chunk_size);
+frame_metrics.ComputeTimeFilter      = zeros(1, chunk_size);
+frame_metrics.ComputeTimeAccumulator = zeros(1, chunk_size);
+frame_metrics.EventsInFrame          = zeros(1, chunk_size);
+frame_metrics.FilteredEvents         = zeros(1, chunk_size);
+frame_metrics.FilteringMEVs          = zeros(1, chunk_size);
+frame_metrics.AccumulatorMEVs        = zeros(1, chunk_size);
+frame_metrics.HotPixelCount          = zeros(1, chunk_size);
+frame_metrics.HotPixelThresh         = zeros(1, chunk_size);
+
+% Pre-allocate the heavy cell arrays
+frame_metrics.ElbowDiagnostics       = cell(1, chunk_size);
+frame_metrics.FilteredCoherenceMap   = cell(1, chunk_size);
+frame_metrics.FilterMask             = cell(1, chunk_size);
+frame_metrics.NormTraceMap           = cell(1, chunk_size);
+frame_metrics.NormRegularityMap      = cell(1, chunk_size);
+frame_metrics.NormPersistMap         = cell(1, chunk_size);
+frame_metrics.LocalHotMask           = cell(1, chunk_size);
+frame_metrics.GlobalHotMask          = cell(1, chunk_size);
+frame_metrics.SortedX                = cell(1, chunk_size);
+
 
 % Track the previous frame's output for temporal SSIM computation.
 % This is separate from time_surface_map_prev (which is the raw
@@ -705,15 +723,14 @@ elbowDiagnostics = {};
 prev_output_for_metrics = zeros(imgSz);
 
 % Initialize IEI
-iei = struct('mean',  zeros(imgSz), ...
-             'var',   zeros(imgSz), ...
-             'valid', false(imgSz), ...
-             'tp1',   nan(imgSz), ...
-             'tp2',   nan(imgSz));
+iei = struct('buf',[]);
 
 %% Data processing starting point
 % Loop through the figures to capture each frame
 for frameIndex = 1:frame_total 
+
+    % Calculate the local index for the current chunk (1 to chunk_size)
+    local_idx = mod(frameIndex - 1, chunk_size) + 1;
 
     if frameIndex == 1
         fprintf('\n')
@@ -800,18 +817,8 @@ for frameIndex = 1:frame_total
 
     % ------------------------- STATISTICS -------------------------------%
     % --------------------------------------------------------------------%
-    [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff] = ...
-        stats.computeNeighborhoodStats(sorted_t, unique_idx, pos, ...
-        group_ends, imgSz);
-
-    % Second-to-last timestamp per pixel (valid where counts >= 2)
-    t_2last = zeros(imgSz);
-    v2 = (group_ends - pos) >= 1;
-    t_2last(unique_idx(v2)) = sorted_t(group_ends(v2) - 1);
-
-    % Per-pixel windowed IEI with minimal fixed-count backfill
-    iei = stats.updateWindowedIEI(iei, t_mean_diff, t_std_diff, ...
-        t_min, t_2last, t_max, counts);
+    [iei, t_mean_diff, t_std_diff_var, iei_valid] = ...
+        stats.updateWindowedIEI(iei, sorted_x, sorted_y, sorted_t, imgSz, coh_params.K_buf_size);
 
     % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% %
     % =========================== FILTERING ==============================%
@@ -893,67 +900,35 @@ for frameIndex = 1:frame_total
         mcf_n_passed_store(frameIndex) = mcf_n_pass;
         mcf_n_total_store(frameIndex)  = mcf_n_tot;
         
-
     elseif strcmp(filterSelection, 'COH') == 1
 
         % --------------------- COHERENCE FILTER -------------------------%
         % ----------------------------------------------------------------%
-        [norm_trace_map, norm_similarity_map, norm_persist_map,...
+        [norm_trace_map, norm_trace_map_nofilt, norm_regularity_map, norm_persist_map,...
             filtered_coherence_map, hot_pixel_accumulator, aperiodic_mask,...
-            persistent_hot_mask, global_hot_mask] = filters.computeCoherenceMask(sorted_x,...
+            local_hot_mask, global_hot_mask] = filters.computeCoherenceMask(sorted_x,...
             sorted_y, sorted_t, imgSz, t_interval, coh_params, frameIndex, ...
-            norm_trace_map_prev, sqrt(iei.var),...
-            iei.mean, counts, hot_pixel_accumulator, plottingFrame,...
-            genFigures, plottingType, global_hot_mask);
+            norm_trace_map_prev, sqrt(t_std_diff_var),...
+            t_mean_diff, counts, hot_pixel_accumulator,...
+            genFigures, global_hot_mask);
 
         % Set any retention variables
         norm_trace_map_prev = norm_trace_map;
+
+        %plot.showImageAsVideo(t_mean_diff');
         
         % Create the filter
         filter_mask = filtered_coherence_map;
         filter_mask(isnan(filter_mask)) = 0;
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
         
-        % Use the Kneedle algorithm to find a suitable threshold
-        % Downsample filter_mask from 640x480 to 320x240 before thresholding
-        % Assume imgSz corresponds to original size; compute target size half in each dim
-        %targetSz = ceil(imgSz / 2);
-        % Use imresize to downsample (preserve range); convert to single for processing
-        %ds_mask = imresize(single(filter_mask), targetSz, 'bilinear');
-        %[th_lo, diag] = stats.findElbowThreshold(ds_mask,'WinHalfSize', 21,'NumThresholds', 100);
-
+        % Calculate the threshold for the filter mask
         [th_lo, diag] = testing.rosinThreshold(filter_mask);
 
         % Use the threshold on the mask & log the result
         filter_mask(filter_mask < th_lo) = 0;
         filtered_coherence_map = filtered_coherence_map.*filter_mask;
-        Z = filter_mask;
 
-        [dz_dy, dz_dx] = gradient(Z);  % dz_dy = dZ/dy (rows), dz_dx = dZ/dx (cols)
-
-        % If the physical spacing in x and y is not 1, use:
-        % [dz_dy, dz_dx] = gradient(Z, dy, dx);
-
-        % Compute gradient magnitude and normal vectors for the surface z = Z(x,y).
-        grad_mag = sqrt(dz_dx.^2 + dz_dy.^2);
-
-        % Surface normals (unnormalized): n = [-dz_dx; -dz_dy; 1]
-        nx = -dz_dx;
-        ny = -dz_dy;
-        nz = ones(size(Z));
-        n_norm = sqrt(nx.^2 + ny.^2 + nz.^2);
-        nx = nx ./ n_norm;
-        ny = ny ./ n_norm;
-        nz = nz ./ n_norm;
-
-        %plot.showImageAsVideo(grad_mag');
-
-        % filter_mask = filter_mask.*filtered_coherence_map;
-        % 
-        % test = filter_mask.*filtered_coherence_map;
-        % test_log = log1p(test);
-        % filter_mask = test_log./max(test_log(:));
-        
         % Compute event-level pass/total counts for the COH filter.
         % The other filters return these directly; COH needs them
         % derived from the pixel-level mask and event locations.
@@ -961,36 +936,49 @@ for frameIndex = 1:frame_total
         coh_n_total  = numel(sorted_x);
         coh_n_passed = sum(filter_mask(coh_linear_idx) > 0);
 
+        test = sqrt(t_std_diff_var./(t_std_diff_var+t_mean_diff.^2));
+
         % Grab the indices of the filtered mask
         filter_mask_idx = find(filter_mask>0);
 
-        frame_metrics.FilterThreshold(frameIndex) = th_lo;
-        elbowDiagnostics{frameIndex} = diag; %#ok<SAGROW>
-
-        % Calculate the total number of currently identified hot pixels
-        frame_metrics.HotPixelCount(frameIndex) = sum(persistent_hot_mask(:));
+        % Store all important data for future plotting
+        frame_metrics.HotPixelCount(local_idx)         = sum(local_hot_mask(:));
+        frame_metrics.FilteredCoherenceMap{local_idx}  = filtered_coherence_map;
+        frame_metrics.FilterMask{local_idx}            = filter_mask;
+        frame_metrics.NormTraceMap{local_idx}          = norm_trace_map;
+        frame_metrics.NormRegularityMap{local_idx}     = norm_regularity_map;
+        frame_metrics.NormPersistMap{local_idx}        = norm_persist_map;
+        frame_metrics.LocalHotMask{local_idx}          = local_hot_mask;
+        frame_metrics.GlobalHotMask{local_idx}         = global_hot_mask;
+        frame_metrics.FilterThreshold(local_idx)       = th_lo;
+        frame_metrics.ElbowDiagnostics{local_idx}      = diag;
+        frame_metrics.SortedX{local_idx}               = sorted_x;
 
         if frameIndex == plottingFrame && genFigures
+
             fprintf(['\nPlotting Norm-Trace-Map-Sample-Density-Nominal-Rot' plottingType '.pdf\n'])
             journal.showScatterPlotOfRuleMaps(norm_trace_map, ['Norm-Trace-Map-Sample-Density-Nominal-Rot' plottingType '.pdf'], false)
             fprintf(['\nPlotting Norm-Trace-Map-Sample-Density-Nominal-Rot' plottingType '-3D.pdf\n'])
             journal.showScatterPlotOfRuleMaps3D(norm_trace_map, ['Norm-Trace-Map-Sample-Density-Nominal-Rot' plottingType '-3D.pdf'], false)
             fprintf(['\nPlotting Similarity-Map-Nominal-Rot' plottingType '.pdf\n'])
-            journal.showScatterPlotOfRuleMaps3D(norm_similarity_map, ['Similarity-Map-Nominal-Rot' plottingType '.pdf'], false)
+            journal.showScatterPlotOfRuleMaps3D(norm_regularity_map, ['Similarity-Map-Nominal-Rot' plottingType '.pdf'], false)
             fprintf(['\nPlotting Persistence-Map-Nominal-Rot' plottingType '.pdf\n'])
             journal.showScatterPlotOfRuleMaps3D(norm_persist_map, ['Persistence-Map-Nominal-Rot' plottingType '.pdf'], false)
             fprintf(['\nPlotting Coherence-Map-Nominal-Rot' plottingType '.pdf\n'])
             journal.showScatterPlotOfRuleMaps3D(filtered_coherence_map, ['Coherence-Map-Nominal-Rot' plottingType '.pdf'], false)
             fprintf(['\nPlotting Hot-Pixel-Accumulator-Map-Nominal-Rot' plottingType '.pdf\n'])
-            journal.showScatterPlotOfHotPixelAccumulatorMap(norm_similarity_map, ['Hot-Pixel-Accumulator-Map-Nominal-Rot' plottingType '.pdf'], false);
+            journal.showScatterPlotOfHotPixelAccumulatorMap(norm_regularity_map, ['Hot-Pixel-Accumulator-Map-Nominal-Rot' plottingType '.pdf'], false);
             fprintf(['\nPlotting Hot-Pixel-Accumulator-Map-Nominal-Rot' plottingType '-2D.pdf\n'])
-            journal.show2DScatterOfLeakyBucketMap(sorted_x, sorted_y,norm_similarity_map>0.8, ['Hot-Pixel-Accumulator-Map-Nominal-Rot' plottingType '-2D.pdf'], false);
+            journal.show2DScatterOfLeakyBucketMap(sorted_x, sorted_y,norm_regularity_map<=coh_params.s_bnd, ['Hot-Pixel-Accumulator-Map-Nominal-Rot' plottingType '-2D.pdf'], false);
             fprintf(['\nPlotting Regularity-Score-Histogram-Nominal-Rot' plottingType '.pdf\n'])
-            journal.showRegularityScoreHistogram(norm_similarity_map, ['Regularity-Score-Histogram-Nominal-Rot' plottingType '.pdf'], false);
+            journal.showRegularityScoreHistogram(norm_regularity_map, ['Regularity-Score-Histogram-Nominal-Rot' plottingType '.pdf'], false);
             fprintf(['\nPlotting Unfiltered-Event-Data-Nominal-Rot' plottingType '.pdf\n'])
             journal.showScatterPlotOfEventVector(sorted_x, sorted_y, sorted_t, ['Unfiltered-Event-Data-Nominal-Rot' plottingType '.pdf'], false)
             fprintf(['\nPlotting Leaky-Bucket-Map-Nominal-Rot' plottingType '.pdf\n'])
-            journal.show2DScatterOfLeakyBucketMap(sorted_x, sorted_y, persistent_hot_mask, ['Leaky-Bucket-Map-Nominal-Rot' plottingType '.pdf'], false);
+            journal.show2DScatterOfLeakyBucketMap(sorted_x, sorted_y, local_hot_mask, ['Leaky-Bucket-Map-Nominal-Rot' plottingType '.pdf'], false);
+            fprintf(['\nPlotting Norm-Trace-Map-Sample-Density-w-Hot-Pixels-Nominal-Rot' plottingType '-3D.pdf\n'])
+            journal.showScatterPlotOfRuleMaps3D(norm_trace_map_nofilt,['Norm-Trace-Map-Sample-Density-w-Hot-Pixels-Nominal-Rot' plottingType '-3D.pdf'], false)
+
         end
 
     elseif strcmp(filterSelection, 'NONE') == 1
@@ -1022,7 +1010,7 @@ for frameIndex = 1:frame_total
     if strcmp(filterSelection, 'COH') == 1
                
         % Strip the defective pixels globally
-        hot_pixel_idx = find(persistent_hot_mask);
+        hot_pixel_idx = find(local_hot_mask);
         
         if ~isempty(hot_pixel_idx)
             % Strip from the coordinate arrays
@@ -1071,18 +1059,9 @@ for frameIndex = 1:frame_total
         % Accumulate polarity into a 2D grid
         % If multiple events land on one pixel, we sum their polarities 
         polarity_map = accumarray([filtered_x, filtered_y], p_signed, imgSz, @sum, 0);
-        %polarity_map = polarity_map.*filter_mask;
-        % test1 = polarity_map;
-        % test2 = test1;
-        % [th_up, ~] = testing.rosinThreshold(test2);
-        % test2(test2<th_up)=-5;
-        % test3 = test1;
-        % [th_down, ~] = testing.rosinThreshold(-test3);
-        % test3(test3>-th_down)=5;
-        % polarity_map = test2+test3;
     
         [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
-        accumulator.localAdaptiveTimeSurface(iei.mean,...
+        accumulator.localAdaptiveTimeSurface(t_mean_diff,...
         time_surface_map_prev, alts_params, filter_mask, polarity_map, counts);
     
         % Set any retention variables
@@ -1212,20 +1191,20 @@ for frameIndex = 1:frame_total
     end
     
     % Compute all per-frame metrics
-    frame_metrics.SRR(frameIndex) = ...
+    frame_metrics.SRR(local_idx) = ...
         metrics.computeSignalRetentionRate(metrics_n_passed, metrics_n_total);
-    frame_metrics.ClarkEvansRemoved(frameIndex) = ...
+    frame_metrics.ClarkEvansRemoved(local_idx) = ...
         metrics.computeClarkEvans(metrics_background_map);
-    frame_metrics.ClarkEvansRemaining(frameIndex) = ...
+    frame_metrics.ClarkEvansRemaining(local_idx) = ...
         metrics.computeClarkEvans(metrics_foreground_map);
-    frame_metrics.ComputeTimeFilter(frameIndex) = filtering_stop;
-    frame_metrics.ComputeTimeAccumulator(frameIndex) = accumulator_stop;
-    frame_metrics.EventsInFrame(frameIndex) = metrics_n_total;
-    frame_metrics.FilteredEvents(frameIndex) = ...
+    frame_metrics.ComputeTimeFilter(local_idx) = filtering_stop;
+    frame_metrics.ComputeTimeAccumulator(local_idx) = accumulator_stop;
+    frame_metrics.EventsInFrame(local_idx) = metrics_n_total;
+    frame_metrics.FilteredEvents(local_idx) = ...
         metrics_n_total-metrics_n_passed;
-    frame_metrics.FilteringMEVs(frameIndex) = ...
+    frame_metrics.FilteringMEVs(local_idx) = ...
         metrics_n_total/filtering_stop;
-    frame_metrics.AccumulatorMEVs(frameIndex) = ...
+    frame_metrics.AccumulatorMEVs(local_idx) = ...
         metrics_n_total/accumulator_stop;
 
     % Update the previous frame reference for next iteration
@@ -1265,8 +1244,50 @@ for frameIndex = 1:frame_total
 
     % Print progress
     stats.printPercentComplete(frameIndex, frame_total, ...
-        frame_metrics.ComputeTimeFilter(frameIndex), ...
-        frame_metrics.ComputeTimeAccumulator(frameIndex));
+        frame_metrics.ComputeTimeFilter(local_idx), ...
+        frame_metrics.ComputeTimeAccumulator(local_idx));
+
+    % Create a distinct filename for the chunk and save it
+    dataOutputFolder =  string(videoOutPath(1:end-4)) + "-METRICS";
+    if frameIndex == 1
+        if ~exist(dataOutputFolder, 'dir')
+            mkdir(dataOutputFolder);
+        else 
+            rmdir(dataOutputFolder, 's');
+            mkdir(dataOutputFolder); % Create the output folder
+        end
+    end
+
+    % Check if the chunk is full, OR if it's the very last frame of the dataset
+    if local_idx == chunk_size || frameIndex == frame_total
+
+        % If it's the last frame and the chunk isn't perfectly full, 
+        % trim the empty preallocated tails so you don't save empty matrices.
+        if frameIndex == frame_total && local_idx < chunk_size
+            frame_metrics.SRR = frame_metrics.SRR(1:local_idx);
+            frame_metrics.FilteredCoherenceMap = frame_metrics.FilteredCoherenceMap(1:local_idx);
+            frame_metrics.FilterMask = frame_metrics.FilterMask(1:local_idx);
+            % (Add any other fields here that you want explicitly trimmed)
+        end
+
+        chunk_filename = fullfile(dataOutputFolder, sprintf('metrics_chunk_%04d.mat', chunk_idx));
+        save(chunk_filename, 'frame_metrics');
+        fprintf('\n[IO] Saved metrics chunk %d to %s\n', chunk_idx, chunk_filename);
+
+        % CRITICAL: Re-initialize the cell arrays to free RAM
+        frame_metrics.ElbowDiagnostics     = cell(1, chunk_size);
+        frame_metrics.FilteredCoherenceMap = cell(1, chunk_size);
+        frame_metrics.FilterMask           = cell(1, chunk_size);
+        frame_metrics.NormTraceMap         = cell(1, chunk_size);
+        frame_metrics.NormRegularityMap    = cell(1, chunk_size);
+        frame_metrics.NormPersistMap       = cell(1, chunk_size);
+        frame_metrics.LocalHotMask         = cell(1, chunk_size);
+        frame_metrics.GlobalHotMask        = cell(1, chunk_size);
+        frame_metrics.SortedX              = cell(1, chunk_size);
+
+        % Increment the chunk counter
+        chunk_idx = chunk_idx + 1;
+    end
 
 end
 

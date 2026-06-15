@@ -1,72 +1,138 @@
-function iei = updateWindowedIEI(iei, t_mean_diff, t_std_diff, ...
-    t_min, t_2last, t_max, counts)
-% UPDATEWINDOWEDIEI  Per-window IEI statistics with minimal backfill.
+function [iei, mean_map, var_map, valid_map] = updateWindowedIEI( ...
+        iei, ev_x, ev_y, ev_t, imgSz, K)
+% COMPUTEWINDOWEDIEI  Per-pixel inter-event-interval (IEI) mean and variance
+% for one time window, backfilled from past windows where the window is
+% too sparse to estimate reliably.
 %
-%   The .mean/.var maps are REBUILT FROM ZERO every call. A pixel gets
-%   a nonzero statistic only if it formed one THIS window. Nothing is
-%   held or accumulated across windows.
+% For every pixel active in the window:
+%   1. count its events this window (c);
+%   2. if c < K, borrow the newest (K - c) real timestamps retained from
+%      previous windows so the estimate is formed from up to K points;
+%   3. compute the IEI mean and Bessel-corrected variance over that
+%      timestamp list, using the same closed-form identities as the
+%      original computeNeighborhoodStats.
 %
-%     counts >= 3 : pure within-window statistics.
-%     counts == 2 : not enough for a variance (one IEI). Backfill the
-%                   single most recent retained event -> 3 points.
-%     counts == 1 : backfill the two most recent retained events
-%                   -> 3 points.
-%     counts == 0, or insufficient history to reach 3 points:
-%                   .mean/.var stay zero this window.
+% Borrowed timestamps are used ONLY in the statistics. They are retained
+% solely because they are among the newest K real timestamps at that pixel;
+% they are never emitted as events.
 %
-%   The only persistent state is the two-timestamp history (tp1, tp2),
-%   which always holds the two most recent REAL events per pixel.
-%   Backfilled events are used transiently to form this window's
-%   statistic and are never re-inserted into any event stream.
+%   K = 1  -> no pixel is ever sparse (every active pixel has >= 1 event),
+%             so no backfill occurs and mean_map/var_map are exactly the IEI
+%             maps of the window alone. Sanity check: mean_map equals the
+%             old t_mean_diff and var_map equals t_std_diff.^2.
+%   K >= 2 -> sparse pixels are topped up to K points.
 %
-%   State (all [imgSz]):
-%     iei.mean / iei.var - THIS window's statistics (zero elsewhere)
-%     iei.valid          - mask of pixels that formed a stat THIS window
-%     iei.tp1 / iei.tp2  - newest / 2nd-newest real event timestamp
-%                          (init NaN)
+% Persistent state (ONLY the ring buffer survives between calls):
+%   iei.buf  [nPix x K]  newest timestamp in the last column, NaN = empty.
 %
-%   Inputs: outputs of stats.computeNeighborhoodStats plus t_2last
-%   (2nd-latest timestamp this window, valid where counts >= 2) and
-%   per-pixel counts.
+% Outputs are FRESH every window (zero / false at inactive pixels), matching
+% the convention of computeNeighborhoodStats. Any temporal holding or
+% smoothing of the per-pixel tau belongs in a downstream EMA, not here.
+%
+% Coordinates: ev_x = row, ev_y = col. Inputs need not be pre-sorted.
 
-new_mean = zeros(size(counts));      % fresh every window
-new_var  = zeros(size(counts));
-made     = false(size(counts));
+    nPix = prod(imgSz);
+    if ~isfield(iei,'buf') || isempty(iei.buf) || size(iei.buf,2) ~= K
+        iei.buf = nan(nPix, K);
+    end
 
-% --- counts >= 3: pure within-window -------------------------------
-dense = counts >= 3;
-new_mean(dense) = t_mean_diff(dense);
-new_var(dense)  = t_std_diff(dense).^2;
-made(dense)     = true;
+    mean_map  = zeros(imgSz);
+    var_map   = zeros(imgSz);
+    valid_map = false(imgSz);
+    if isempty(ev_t), return; end
 
-% --- counts == 2: backfill one retained event ----------------------
-twoOK = (counts == 2) & ~isnan(iei.tp1);
-d1 = t_min(twoOK) - iei.tp1(twoOK);
-d2 = t_max(twoOK) - t_min(twoOK);
-mB = (d1 + d2) ./ 2;
-new_mean(twoOK) = mB;
-new_var(twoOK)  = (d1 - mB).^2 + (d2 - mB).^2;   % n-1 = 1 (Bessel)
-made(twoOK)     = true;
+    ev_x = ev_x(:);  ev_y = ev_y(:);  ev_t = ev_t(:);
 
-% --- counts == 1: backfill two retained events ---------------------
-oneOK = (counts == 1) & ~isnan(iei.tp1) & ~isnan(iei.tp2);
-e1 = iei.tp1(oneOK) - iei.tp2(oneOK);
-e2 = t_max(oneOK)   - iei.tp1(oneOK);
-mC = (e1 + e2) ./ 2;
-new_mean(oneOK) = mC;
-new_var(oneOK)  = (e1 - mC).^2 + (e2 - mC).^2;
-made(oneOK)     = true;
+    % ----------------------------------------------------------------------
+    % 1. Index the window's events by active pixel.
+    % ----------------------------------------------------------------------
+    lin = sub2ind(imgSz, ev_x, ev_y);
+    uid = unique(lin, 'stable');             % active pixels (linear index)
+    A   = numel(uid);
+    row_of_pix      = zeros(nPix, 1);
+    row_of_pix(uid) = (1:A)';
+    win_row = row_of_pix(lin);               % active-pixel row of each event
+    counts  = accumarray(win_row, 1, [A 1]); % events this window per pixel
 
-iei.mean  = new_mean;
-iei.var   = new_var;
-iei.valid = made;                    % this window only, NOT sticky
+    % ----------------------------------------------------------------------
+    % 2. Pull backfill from the ring buffer: newest (K - counts) per pixel.
+    %    need = 0 for any pixel with counts >= K, so dense pixels borrow none.
+    % ----------------------------------------------------------------------
+    need = max(0, K - counts);
 
-% --- history update (AFTER use): two most recent REAL events -------
-ge2 = counts >= 2;
-iei.tp2(ge2) = t_2last(ge2);
-iei.tp1(ge2) = t_max(ge2);
+    oldbuf  = iei.buf(uid, :);               % [A x K], newest in last column
+    [br, bc] = find(~isnan(oldbuf));         % rows/cols of retained timestamps
+    br = br(:);  bc = bc(:);
+    old_ts  = oldbuf(sub2ind([A K], br, bc));
+    old_ts  = old_ts(:);                     % row when A==1; force column
 
-eq1 = counts == 1;
-iei.tp2(eq1) = iei.tp1(eq1);         % shift old newest down
-iei.tp1(eq1) = t_max(eq1);
+    % buffer is right-packed, so newest entry is the largest column:
+    rank_from_new = K - bc + 1;              % 1 = newest
+    borrow = rank_from_new <= need(br);      % take the newest 'need' of each
+    bx_borrow = br(borrow);
+    bt_borrow = old_ts(borrow);
+
+    % ----------------------------------------------------------------------
+    % 3. Statistics stream = window events + borrowed timestamps, grouped by
+    %    pixel and sorted in time (borrowed are older, so they fall first).
+    %    Then apply the computeNeighborhoodStats IEI identities.
+    % ----------------------------------------------------------------------
+    R = [win_row;  bx_borrow];
+    T = [ev_t;     bt_borrow];
+    M = sortrows([R, T], [1 2]);
+    R = M(:,1);  T = M(:,2);
+
+    isStart = [true; R(2:end) ~= R(1:end-1)];
+    gstart  = find(isStart);
+    gend    = [gstart(2:end) - 1; numel(R)];
+    n       = gend - gstart + 1;             % points used per pixel
+    nIEI    = n - 1;                         % intervals per pixel
+
+    % IEI mean via the telescoping identity mean(diff) = (t_end - t_first)/nIEI
+    t_first = T(gstart);
+    t_last  = T(gend);
+    mu_d        = (t_last - t_first) ./ max(nIEI, 1);
+    mu_d(n < 2) = 0;
+
+    % IEI variance: sum of squared within-pixel diffs via accumarray,
+    % excluding the diffs that straddle a pixel boundary.
+    d      = diff(T);
+    within = true(numel(T) - 1, 1);
+    within(gend(1:end-1)) = false;
+    glab   = cumsum(isStart);  glab = glab(1:end-1);   % group label per diff
+    sum_d2 = accumarray(glab(within), d(within).^2, [A 1]);
+
+    var_d        = (sum_d2 - nIEI .* mu_d.^2) ./ max(nIEI - 1, 1);
+    var_d        = max(var_d, 0);            % clamp float noise
+    var_d(n < 3) = 0;                        % need >= 2 intervals for a std
+
+    valid = n >= K;                 % emit only once K events are assembled
+    mu_d(~valid)  = NaN;            % NaN, not 0 — a 0 mean detonates CV downstream
+    var_d(~valid) = NaN;
+    
+    mean_map(uid)  = mu_d;
+    var_map(uid)   = var_d;
+    valid_map(uid) = valid;
+
+    % ----------------------------------------------------------------------
+    % 4. Refresh the ring buffer: newest K real timestamps per active pixel
+    %    (old retained timestamps + this window's events; older ones drop).
+    % ----------------------------------------------------------------------
+    Rb = [br;       win_row];
+    Tb = [old_ts;   ev_t];
+    Mb = sortrows([Rb, Tb], [1 2]);
+    Rb = Mb(:,1);  Tb = Mb(:,2);
+
+    sB    = [true; Rb(2:end) ~= Rb(1:end-1)];
+    gsB   = find(sB);
+    grpB  = cumsum(sB);
+    nB    = accumarray(grpB, 1, [A 1]);
+    posB  = (1:numel(Rb))' - gsB(grpB);      % 0-based position within pixel
+    rankB = nB(grpB) - posB;                 % 1 = newest
+
+    keep   = rankB <= K;
+    col    = K - rankB(keep) + 1;            % newest -> column K
+    newbuf = nan(A, K);
+    newbuf(sub2ind([A K], grpB(keep), col)) = Tb(keep);
+    iei.buf(uid, :) = newbuf;
 end
