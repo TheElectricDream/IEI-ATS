@@ -660,7 +660,7 @@ zhu_params.median_sz   = 3;
 alts_params.dt                   = t_interval;
 alts_params.filter_size          = 11;
 alts_params.filter_sigma         = 9.0;
-alts_params.surface_tau_release  = 0.1;
+alts_params.surface_tau_release  = 3.0;
 alts_params.div_norm_exp         = 1.0;
 alts_params.symmetric_tone_scale = 1.0;
 alts_activity_score.mean         = zeros(frame_total, 1);
@@ -940,8 +940,6 @@ for frameIndex = 1:frame_total
 
         % Set any retention variables
         norm_trace_map_prev = norm_trace_map;
-
-        filtered_coherence_map_raw = filtered_coherence_map;
         
         % Create the filter
         filter_mask = filtered_coherence_map;
@@ -969,8 +967,8 @@ for frameIndex = 1:frame_total
         counts = counts.*filtered_counts_mask.*(filter_mask>0);
 
         % Overwrite the stats
-        t_mean = t_mean.*filtered_counts_mask.*(filter_mask>0);
-
+        t_mean = t_mean.*
+.*filtered_counts_mask.*(filter_mask>0);
         % Store all important data for future plotting
         frame_metrics.HotPixelCount(frameIndex)         = sum(local_hot_mask(:));
         frame_metrics.FilterThreshold(frameIndex)       = th_lo;
@@ -1010,8 +1008,7 @@ for frameIndex = 1:frame_total
             journal.show2DScatterOfLeakyBucketMap(sorted_x, sorted_y, local_hot_mask, ['Leaky-Bucket-Map-Nominal-Rot' plottingType '.pdf'], false);
             fprintf(['\nPlotting Norm-Trace-Map-Sample-Density-w-Hot-Pixels-Nominal-Rot' plottingType '-3D.pdf\n'])
             journal.showScatterPlotOfRuleMaps3D(norm_trace_map_nofilt,['Norm-Trace-Map-Sample-Density-w-Hot-Pixels-Nominal-Rot' plottingType '-3D.pdf'], false)
-            journal.showScatterPlotOfRuleMaps3D(filtered_coherence_map_raw,['Norm-Coherence-Map-Unfiltered' plottingType '-3D.pdf'], false)
-            journal.showScatterPlotOfRuleMaps(filtered_coherence_map_raw,['Norm-Coherence-Map-Unfiltered' plottingType '.pdf'], false)
+
         end
 
     elseif strcmp(filterSelection, 'NONE') == 1
@@ -1101,7 +1098,7 @@ for frameIndex = 1:frame_total
         polarity_map = accumarray([filtered_x, filtered_y], p_signed, imgSz, @sum, 0);
 
         [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
-        accumulator.localAdaptiveTimeSurface(t_mean_diff,...
+        accumulator.localAdaptiveTimeSurface(t_mean,...
         time_surface_map_prev, alts_params, filter_mask, polarity_map, counts);
     
         % Set any retention variables

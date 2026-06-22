@@ -119,7 +119,7 @@ function [normalized_output_frame, time_surface_map_raw, ...
     % ----------------------------------------------------------------
     % 4. Coupled gain-decay coefficient
     % ----------------------------------------------------------------
-    adaptive_gains = 1 - exp(-dt ./ tau_effective);
+adaptive_gains = 1 - exp(-dt ./ tau_effective);
     
     % REMOVED: adaptive_gains(activity_blurred == 0) = 0;
     % Let the surface_tau_release parameter handle the decay of idle pixels!
@@ -134,37 +134,28 @@ function [normalized_output_frame, time_surface_map_raw, ...
     time_surface_map_raw = adaptive_gains .* masked_input ...
         + (1 - adaptive_gains) .* time_surface_map_prev;
 
+    % Suppress inactive pixels to eliminate trailing artifacts
+    time_surface_map_raw = ...
+        time_surface_map_raw .* single(activity_blurred > 0);
+
     % ----------------------------------------------------------------
     % 6. Divisive normalization (Carandini-Heeger)
     % ----------------------------------------------------------------
     magnitude = abs(time_surface_map_raw);
+
     activity_pool = imgaussfilt(magnitude, filter_sigma, ...
         'FilterSize', filter_size);
     counts_smooth = imgaussfilt(single(counts), filter_sigma, ...
         'FilterSize', filter_size);
-        
+
+    % Semi-saturation constant from median activity
     time_surface_map = zeros(size(masked_input));
-    good_mask = (magnitude > 0); 
-    
-    if any(good_mask(:))
-        % Calculate the dynamic median
-        dynamic_sigma = median(activity_pool(activity_pool > 0));
-        
-        % FIX: Define a baseline noise floor to prevent infinite gain.
-        % (You can tune this value between 0.01 and 0.1 depending on your sensor noise)
-        sigma_base = 0.5; 
-        
-        % Lock sigma to the baseline if the surface gets too quiet
-        if isnan(dynamic_sigma) || dynamic_sigma < sigma_base
-            sigma = sigma_base;
-        else
-            sigma = dynamic_sigma;
-        end
-        
-        time_surface_map(good_mask) = ...
-            time_surface_map_raw(good_mask) ./ ...
-            (sigma + counts_smooth(good_mask) .^ div_norm_exp);
-    end
+    good_mask = (abs(masked_input) > 0);
+    sigma = median(activity_pool(abs(activity_pool) > 0));
+
+    time_surface_map(good_mask) = ...
+        time_surface_map_raw(good_mask) ./ ...
+        (sigma + counts_smooth(good_mask) .^ div_norm_exp);
     
     % ----------------------------------------------------------------
     % 8. Tone mapping for display

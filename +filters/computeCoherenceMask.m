@@ -1,6 +1,6 @@
 function [norm_trace_map, norm_trace_map_nofilt, norm_regularity_map, ...
-    norm_persist_map, norm_coherence_map, hot_pixel_accumulator,...
-    aperiodic_mask, local_hot_mask, global_hot_mask] = ...
+    norm_persist_map, norm_persist_map_raw, norm_coherence_map, hot_pixel_accumulator,...
+    aperiodic_mask, local_hot_mask, global_hot_mask, secondary_cleaning, filtered_counts_mask] = ...
     computeCoherenceMask(sorted_x, sorted_y, sorted_t, imgSz, ...
     t_interval, coh_params, ...
     frameIndex, norm_trace_map_prev, std_map, mean_map, counts, hot_pixel_accumulator, ...
@@ -128,11 +128,12 @@ function [norm_trace_map, norm_trace_map_nofilt, norm_regularity_map, ...
     norm_trace_map = log_trace_map' ./ max(log_trace_map(:));
 
     % ----------------------------------------------------------------
-    % 4. Rule 3 — Temporal persistence
+    % 4. Rule 3a — Temporal persistence
     % ----------------------------------------------------------------
     if frameIndex == 1
         % No previous frame available — use trace map as proxy
         persist_map = norm_trace_map;
+        filtered_counts_mask = ones(size(persist_map));
     else
         persist_map = zeros(size(norm_trace_map));
 
@@ -145,13 +146,29 @@ function [norm_trace_map, norm_trace_map_nofilt, norm_regularity_map, ...
             persist_map(validIdx) = minDists;
         end
 
+        % Remove the hot pixels from the counts mask as well
+        filtered_counts_mask = (counts > 0) & ~local_hot_mask;
+
         % Calculate the exponential decayed persistance to "invert" the meaning
-        persist_map = exp(-persist_map / median(persist_map(persist_map > 0))).*(counts>0);
+        persist_map = exp(-persist_map / median(persist_map(persist_map > 0))).*(filtered_counts_mask>0);
     end
     
     % Log-normalize the persistence map
     log_persist_map = log1p(persist_map);
-    norm_persist_map = log_persist_map ./ max(log_persist_map(:));
+    norm_persist_map_raw = log_persist_map ./ max(log_persist_map(:));
+
+    % ----------------------------------------------------------------
+    % 4. Rule 3b — Overly persistent single event removal
+    % ----------------------------------------------------------------
+    if frameIndex == 1
+        norm_persist_map = norm_persist_map_raw;
+        secondary_cleaning = zeros(size(norm_persist_map));
+    else
+        secondary_cleaning = (norm_persist_map_raw==1);
+        norm_persist_map = norm_persist_map_raw;
+        % Apply secondary cleaning to remove overly persistent events
+        norm_persist_map(secondary_cleaning==1) = 0;
+    end
 
     % ----------------------------------------------------------------
     % 5. Combine rule maps
