@@ -12,7 +12,7 @@ if isLooping == false
     close all;
 
     % Use buffered data
-    useBuffer = true;
+    useBuffer = false;
     
     % Select algorithms for filtering and accumulation
     % Set 'None' for filter selection to skip filtering entirely
@@ -27,9 +27,9 @@ if isLooping == false
 
     % Set dataset name
     %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-    fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+    %fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
     %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
-    %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
+    fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
     %fileName = 'recording_20251029_153226.hdf5';  % EVOS - NOM - CC+ROT
 
 else
@@ -118,14 +118,17 @@ imgSz                       = [640, 480];
 % Set the plotting frame for journal paper figures
 genFigures                  = true;  % Slows down code
 
-plottingFrame               = 205;  % 205 For Nominal Lighting
-plottingType                = '-NOM';
+% plottingFrame               = 205;  % 205 For Nominal Lighting
+% plottingType                = '-DENSE';
+
+% plottingFrame               = 205;  % 205 For Nominal Lighting
+% plottingType                = '-NOM';
 
 % plottingFrame               = 179;  % For High Glare
 % plottingType                = '-SG';
 
-% plottingFrame               = 181;  % For Low Light
-% plottingType                = '-DARK';
+plottingFrame               = 181;  % For Low Light
+plottingType                = '-DARK';
 
 % plottingFrame               = 205;  % 205 For Nominal Lighting
 % plottingType                = '-STCC-NOM';
@@ -375,10 +378,10 @@ stcc_n_total_store          = zeros(1, frame_total);
 % -------------------------------------------------------------------------
 % Tuning Guide:
  
-coh_params.r_s              = 30/imgSz(1);  % Density kernal diameter
-coh_params.s_bnd            = 0.5506;  % Regularity bound 
+coh_params.r_s              = 60/imgSz(1);  % Density kernal diameter
+coh_params.s_bnd            = 0.7;  % Regularity bound 
 coh_params.hpa_decay        = 0.9;  % Decay per frame for HPA calculation
-coh_params.hpa_bnd          = 2;  % Number of warm-up frames before statistcs are valid
+coh_params.hpa_bnd          = 8;  % Number of warm-up frames before statistcs are valid
 coh_params.K_buf_size       = 1;  % Number of events to hold in buffer for IEI
 
 
@@ -814,6 +817,7 @@ for frameIndex = 1:frame_total
     % each "house" minus the starting position (i.e. the difference)
     % gives you the total number of "things" assigned to that "ID". 
     counts(unique_idx) = group_ends - pos + 1;
+    counts_raw = counts;
 
     % ------------------------- STATISTICS -------------------------------%
     % --------------------------------------------------------------------%
@@ -949,9 +953,10 @@ for frameIndex = 1:frame_total
         filter_mask = single(imgaussfilt(single(filter_mask), 5.0, "FilterSize", 9));
         
         % Calculate the threshold for the filter mask
-        [th_lo, diag] = testing.rosinThreshold(filter_mask);
-
+        [th_lo, d] = testing.rosinThreshold(filter_mask);
+        
         % Use the threshold on the mask & log the result
+        filtered_coherence_map_nogauss = filtered_coherence_map.*filter_mask;
         filter_mask(filter_mask < th_lo) = 0;
         filtered_coherence_map = filtered_coherence_map.*filter_mask;
 
@@ -970,6 +975,7 @@ for frameIndex = 1:frame_total
 
         % Overwrite the stats
         t_mean = t_mean.*filtered_counts_mask.*(filter_mask>0);
+        t_mean_diff = t_mean_diff.*filtered_counts_mask.*(filter_mask>0);
 
         % Store all important data for future plotting
         frame_metrics.HotPixelCount(frameIndex)         = sum(local_hot_mask(:));
@@ -983,7 +989,7 @@ for frameIndex = 1:frame_total
             frame_metrics.NormPersistMap{frameIndex}        = norm_persist_map;
             frame_metrics.LocalHotMask{frameIndex}          = local_hot_mask;
             frame_metrics.GlobalHotMask{frameIndex}         = global_hot_mask;
-            frame_metrics.ElbowDiagnostics{frameIndex}      = diag;
+            frame_metrics.ElbowDiagnostics{frameIndex}      = d;
         end
 
         if frameIndex == plottingFrame && genFigures
@@ -1012,7 +1018,12 @@ for frameIndex = 1:frame_total
             journal.showScatterPlotOfRuleMaps3D(norm_trace_map_nofilt,['Norm-Trace-Map-Sample-Density-w-Hot-Pixels-Nominal-Rot' plottingType '-3D.pdf'], false)
             journal.showScatterPlotOfRuleMaps3D(filtered_coherence_map_raw,['Norm-Coherence-Map-Unfiltered' plottingType '-3D.pdf'], false)
             journal.showScatterPlotOfRuleMaps(filtered_coherence_map_raw,['Norm-Coherence-Map-Unfiltered' plottingType '.pdf'], false)
+            journal.showScatterPlotOfRuleMaps3D(filter_mask,['Norm-Coherence-Map-Gaussian-Only' plottingType '-3D.pdf'], false)
+            journal.showScatterPlotOfRuleMaps3D(filtered_coherence_map_nogauss,['Norm-Coherence-Map-Gaussian' plottingType '-3D.pdf'], false)
+            journal.showScatterPlotOfRuleMaps3D(filtered_coherence_map,['Norm-Coherence-Map-Gaussian-Filtered' plottingType '-3D.pdf'], false)
+            journal.showRosinThresholdConstructionNorm(d, th_lo, ['Rosin-Threshold-' plottingType], true);
         end
+            % journal.showRosinThresholdConstruction(d, th_lo, ['Rosin-Threshold-' plottingType], true);
 
     elseif strcmp(filterSelection, 'NONE') == 1
 
@@ -1099,6 +1110,9 @@ for frameIndex = 1:frame_total
         % Accumulate polarity into a 2D grid
         % If multiple events land on one pixel, we sum their polarities 
         polarity_map = accumarray([filtered_x, filtered_y], p_signed, imgSz, @sum, 0);
+        if frameIndex == 86
+            fprintf('Pause');
+        end
 
         [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
         accumulator.localAdaptiveTimeSurface(t_mean_diff,...
@@ -1182,7 +1196,7 @@ for frameIndex = 1:frame_total
     
     % Determine n_passed and n_total from whichever filter ran.
     % Each filter stores these differently; unify them here.
-    recovered_events = process.recoverRemovedEvents(filter_mask, counts);
+    recovered_events = process.recoverRemovedEvents(filter_mask, counts_raw);
     switch filterSelection
         case 'STC'
             metrics_n_passed = stc_n_pass;
@@ -1210,7 +1224,7 @@ for frameIndex = 1:frame_total
 
             % Coherence requires a special calculation due to the Gaussian
             % blur applied
-            temporary_filter_mask = recovered_events.*counts;
+            temporary_filter_mask = recovered_events.*counts_raw;
             metrics_background_map = (temporary_filter_mask>0).*1.0;
             metrics_foreground_map = (filter_mask>0).*1.0;
         case 'MCF'
@@ -1312,6 +1326,11 @@ end
 if genFigures
     % Exporting figures
     journal.showALTSActivityScoreStatistics(alts_activity_score,'ALTS-Adaptive-Gain-Mean-Rot-Nom',false)
+    theta_series = frame_metrics.FilterThreshold;   
+    srr_series   = frame_metrics.SRR;  
+    srr_series(srr_series == 0) = [];
+    journal.showRosinThresholdStability(theta_series, srr_series, ...
+        'Rosin-Sequence-NOM', false);
 end
 
 % Close the video writer
