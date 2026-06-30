@@ -27,9 +27,9 @@ if isLooping == false
 
     % Set dataset name
     %fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-    %fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+    fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
     %fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
-    fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
+    %fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
     %fileName = 'recording_20251029_153226.hdf5';  % EVOS - NOM - CC+ROT
 
 else
@@ -121,14 +121,14 @@ genFigures                  = true;  % Slows down code
 % plottingFrame               = 205;  % 205 For Nominal Lighting
 % plottingType                = '-DENSE';
 
-% plottingFrame               = 205;  % 205 For Nominal Lighting
-% plottingType                = '-NOM';
+plottingFrame               = 205;  % 205 For Nominal Lighting
+plottingType                = '-NOM';
 
 % plottingFrame               = 179;  % For High Glare
 % plottingType                = '-SG';
 
-plottingFrame               = 181;  % For Low Light
-plottingType                = '-DARK';
+% plottingFrame               = 181;  % For Low Light
+% plottingType                = '-DARK';
 
 % plottingFrame               = 205;  % 205 For Nominal Lighting
 % plottingType                = '-STCC-NOM';
@@ -694,6 +694,11 @@ norm_trace_map_prev     = zeros(imgSz);
 time_surface_map_prev   = zeros(imgSz);
 hot_pixel_accumulator   = zeros(imgSz);
 
+% --- PA-TSD Export Initialization ---
+% Pre-allocate as [H, W, Frames] to save memory. 
+patsd_alts = zeros(imgSz(2), imgSz(1), frame_total, 'uint8');
+patsd_persist = zeros(imgSz(2), imgSz(1), frame_total, 'single');
+
 %% Initialize chunked data storage
 
 % Pre-allocate metrics storage .
@@ -1117,6 +1122,13 @@ for frameIndex = 1:frame_total
         [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
         accumulator.localAdaptiveTimeSurface(t_mean_diff,...
         time_surface_map_prev, alts_params, filter_mask, polarity_map, counts);
+
+        % --- PA-TSD Export Capture ---
+        % Transpose [W,H] to [H,W] for standard image coordinate tracking
+        patsd_alts(:,:,frameIndex) = uint8(normalized_output_frame' .* 255);
+        if exist('norm_persist_map', 'var')
+            patsd_persist(:,:,frameIndex) = single(norm_persist_map');
+        end
     
         % Set any retention variables
         time_surface_map_prev = time_surface_map_raw;
@@ -1318,6 +1330,11 @@ for frameIndex = 1:frame_total
         filename = fullfile(dataOutputFolder, 'metrics.mat');
         save(filename, 'frame_metrics');
         fprintf('\n[IO] Saved metrics to %s\n', filename);
+
+        % --- PA-TSD Save to Disk ---
+        patsd_file = fullfile(dataOutputFolder, 'patsd_data.mat');
+        save(patsd_file, 'patsd_alts', 'patsd_persist', 't_total', 't_interval', '-v7.3');
+        fprintf('\n[IO] Saved PA-TSD surface data to %s\n', patsd_file);
 
     end
 
