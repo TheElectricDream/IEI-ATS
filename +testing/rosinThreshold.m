@@ -81,7 +81,7 @@ function [auto_threshold, diagnostics] = rosinThreshold(score_map, varargin)
     p = inputParser;
     addRequired(p, 'score_map', @(x) isnumeric(x) && ismatrix(x));
     addParameter(p, 'NumBins',      256, @(x) isscalar(x) && x >= 8);
-    addParameter(p, 'SmoothWidth',  5,   @(x) isscalar(x) && x >= 1);
+    addParameter(p, 'SmoothWidth',  1,   @(x) isscalar(x) && x >= 1);
     addParameter(p, 'TailQuantile', 1.0, @(x) isscalar(x) && x > 0 && x <= 1);
     parse(p, score_map, varargin{:});
 

@@ -379,9 +379,9 @@ stcc_n_total_store          = zeros(1, frame_total);
 % Tuning Guide:
  
 coh_params.r_s              = 60/imgSz(1);  % Density kernal diameter
-coh_params.s_bnd            = 0.7;  % Regularity bound 
+coh_params.s_bnd            = 0.3;  % Regularity bound 
 coh_params.hpa_decay        = 0.9;  % Decay per frame for HPA calculation
-coh_params.hpa_bnd          = 8;  % Number of warm-up frames before statistcs are valid
+coh_params.hpa_bnd          = 3;  % Number of warm-up frames before statistcs are valid
 coh_params.K_buf_size       = 1;  % Number of events to hold in buffer for IEI
 
 
@@ -736,6 +736,12 @@ prev_output_for_metrics = zeros(imgSz);
 iei = struct('buf',[]);
 iei_accum = struct('buf',[]);
 
+% Pre-allocate cells to store the surviving events of each chunk
+global_filtered_x = cell(frame_total, 1);
+global_filtered_y = cell(frame_total, 1);
+global_filtered_t = cell(frame_total, 1);
+global_filtered_p = cell(frame_total, 1);
+
 %% Data processing starting point
 % Loop through the figures to capture each frame
 for frameIndex = 1:frame_total 
@@ -829,29 +835,29 @@ for frameIndex = 1:frame_total
     % [iei, t_mean_diff, t_std_diff_var, iei_valid] = ...
     %     stats.updateWindowedIEI(iei, sorted_x, sorted_y, sorted_t, imgSz, 1);
 
-    % % Pre-allocate a 1x5 cell array if it doesn't exist yet
-    % if ~exist('event_storage', 'var') || isempty(event_storage)
-    %     event_storage = cell(1, 5);
-    % end
-    % 
-    % % Shift the older frames down (Index 1 -> 2, 2 -> 3, 3 -> 4, 4 -> 5)
-    % event_storage(2:5) = event_storage(1:4);
-    % 
-    % % Package and store the current frame data into cell index 1
-    % event_storage{1} = struct(...
-    %     'sorted_t',   sorted_t, ...
-    %     'unique_idx', unique_idx, ...
-    %     'group_ends', group_ends ...
-    % );
+    % Pre-allocate a 1x5 cell array if it doesn't exist yet
+    if ~exist('event_storage', 'var') || isempty(event_storage)
+        event_storage = cell(1, 5);
+    end
 
-    % [t_mean, t_mean_diff, t_std_diff, counts] = stats.backfillIEIStatisticsOptimized(sorted_t-sorted_t(1), unique_idx, pos, ...
-    %     group_ends, imgSz, counts, 1, event_storage);
-    % t_std_diff_var = t_std_diff.^2;
+    % Shift the older frames down (Index 1 -> 2, 2 -> 3, 3 -> 4, 4 -> 5)
+    event_storage(2:5) = event_storage(1:4);
+
+    % Package and store the current frame data into cell index 1
+    event_storage{1} = struct(...
+        'sorted_t',   sorted_t, ...
+        'unique_idx', unique_idx, ...
+        'group_ends', group_ends ...
+    );
+
+    [t_mean, t_mean_diff, t_std_diff, counts] = stats.backfillIEIStatisticsOptimized(sorted_t-sorted_t(1), unique_idx, pos, ...
+        group_ends, imgSz, counts, 15, event_storage);
+    t_std_diff_var = t_std_diff.^2;
 
     % Calculate the window statistics using the updated backfilled arrays
-    [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff] = ...
-        stats.computeNeighborhoodStats(sorted_t, unique_idx, pos, ...
-        group_ends, imgSz);
+    % [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff] = ...
+    %     stats.computeNeighborhoodStats(sorted_t, unique_idx, pos, ...
+    %     group_ends, imgSz);
     t_mean = t_mean-min(sorted_t);
 
 
@@ -943,7 +949,7 @@ for frameIndex = 1:frame_total
             norm_persist_map_raw, filtered_coherence_map, hot_pixel_accumulator, aperiodic_mask,...
             local_hot_mask, global_hot_mask, secondary_cleaning, filtered_counts_mask] = filters.computeCoherenceMask(sorted_x,...
             sorted_y, sorted_t, imgSz, t_interval, coh_params, frameIndex, ...
-            norm_trace_map_prev, t_std_diff,...
+            norm_trace_map_prev, sqrt(t_std_diff),...
             t_mean_diff, counts, hot_pixel_accumulator,...
             genFigures, global_hot_mask);
 
@@ -1026,7 +1032,8 @@ for frameIndex = 1:frame_total
             journal.showScatterPlotOfRuleMaps3D(filter_mask,['Norm-Coherence-Map-Gaussian-Only' plottingType '-3D.pdf'], false)
             journal.showScatterPlotOfRuleMaps3D(filtered_coherence_map_nogauss,['Norm-Coherence-Map-Gaussian' plottingType '-3D.pdf'], false)
             journal.showScatterPlotOfRuleMaps3D(filtered_coherence_map,['Norm-Coherence-Map-Gaussian-Filtered' plottingType '-3D.pdf'], false)
-            journal.showRosinThresholdConstructionNorm(d, th_lo, ['Rosin-Threshold-' plottingType], true);
+            journal.showRosinThresholdConstructionNorm(d, th_lo, ['Rosin-Threshold-Construction-Norm' plottingType '.pdf'], false);
+            journal.showRosinScoreDistribution(d, th_lo,  ['Rosin-Threshold-Distribution' plottingType '.pdf'], false);
         end
             % journal.showRosinThresholdConstruction(d, th_lo, ['Rosin-Threshold-' plottingType], true);
 
@@ -1094,6 +1101,12 @@ for frameIndex = 1:frame_total
     % Ensure polarity is -1 and 1 (if it's 0 and 1)
     p_signed = double(filtered_p);
     p_signed(p_signed == 0) = -1;
+
+    % Drop the current chunk's surviving events into the global storage
+    global_filtered_x{frameIndex} = filtered_x;
+    global_filtered_y{frameIndex} = filtered_y;
+    global_filtered_t{frameIndex} = filtered_t;
+    global_filtered_p{frameIndex} = filtered_p;
     
     if frameIndex == plottingFrame && genFigures
         fprintf(['\nPlotting Fully-Filtered-Event-Data-Nominal-Rot' plottingType '.pdf\n'])
@@ -1342,12 +1355,12 @@ end
 
 if genFigures
     % Exporting figures
-    journal.showALTSActivityScoreStatistics(alts_activity_score,'ALTS-Adaptive-Gain-Mean-Rot-Nom',false)
+    journal.showALTSActivityScoreStatistics(alts_activity_score,['ALTS-Adaptive-Gain-Mean-Rot-Nom' plottingType],false)
     theta_series = frame_metrics.FilterThreshold;   
     srr_series   = frame_metrics.SRR;  
     srr_series(srr_series == 0) = [];
     journal.showRosinThresholdStability(theta_series, srr_series, ...
-        'Rosin-Sequence-NOM', false);
+        ['Rosin-Sequence-Threshold-Stability' plottingType '.pdf'], false);
 end
 
 % Close the video writer
