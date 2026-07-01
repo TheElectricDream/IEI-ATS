@@ -1,91 +1,64 @@
-function [] = showRosinThresholdConstructionNorm(diagStruct, th, name, show)
-% SHOWROSINTHRESHOLDCONSTRUCTIONNORM  Scale-free Rosin construction figure.
+function [] = showRosinThresholdConstructionNorm(diag, thresh_val, name, show)
+% SHOWROSINTHRESHOLDCONSTRUCTIONNORM  Normalized geometric projection plot.
 %
-%   Plots the coherence histogram in the [0,1]x[0,1] chord-span
-%   coordinates used internally by ROSINTHRESHOLD, so the dominant
-%   low-score noise spike no longer swamps the figure. Shows the
-%   normalized histogram envelope, the peak-to-tail chord, and the
-%   detected corner with its perpendicular drop to the chord.
+%   SHOWROSINTHRESHOLDCONSTRUCTIONNORM(DIAG, THRESH_VAL, NAME, SHOW) 
 %
 %   Inputs:
-%     diagStruct - Diagnostics struct (2nd output of rosinThreshold).
-%     th         - Scalar selected threshold (actual score value),
-%                  annotated in the legend.
-%     name       - Filename stem; '-Norm.pdf' is appended.
-%     show       - Logical. true displays; false renders offscreen.
-%
-%   See also: rosinThreshold, journal.showRosinThresholdConstruction
+%     diag       - Struct output from testing.rosinThreshold.
+%     thresh_val - Scalar threshold value.
+%     name       - String. Filename for the exported figure.
+%     show       - Logical. If true, displays the figure; otherwise hidden.
 
-req = {'bin_centers', 'counts_smooth', 'perp_dist', ...
-    'peak_idx', 'end_idx'};
-if ~isstruct(diagStruct) || ~all(isfield(diagStruct, req))
-    error('showRosinThresholdConstructionNorm:badInput', ...
-        ['First arg must be the diagnostics struct (2nd output ' ...
-        'of rosinThreshold); got a %s.'], class(diagStruct));
+% 1. Format the data
+idx_span = diag.peak_idx : diag.end_idx;
+x_span = diag.bin_centers(idx_span);
+y_span = diag.counts_smooth(idx_span);
+
+x_n = (x_span - x_span(1)) / (x_span(end) - x_span(1));
+y_n = (y_span - y_span(end)) / (y_span(1) - y_span(end));
+
+% Find max deviation projection
+t_rel_idx = find(idx_span == diag.thresh_idx, 1);
+x0 = x_n(t_rel_idx);
+y0 = y_n(t_rel_idx);
+x_proj = (x0 - y0 + 1) / 2;
+y_proj = (-x0 + y0 + 1) / 2;
+
+% 2. Initialize figure visibility
+if show
+    fig = figure();
+else
+    fig = figure('Visible', 'off');
 end
-
-basePath = ['/home/alexandercrain/Dropbox/Graduate Documents/' ...
-    'Doctor of Philosophy/Publications/Journals/AIAA Journal of ' ...
-    'Spacecraft and Rockets/Event_Based_Spacecraft_Representation_' ...
-    'Using_Inter_Event_Interval_Adaptive_Time_Surfaces/results/' ...
-    'generated-figures/'];
-
-c_chord  = [0.85 0.10 0.10];
-c_curve  = [0.30 0.45 0.80];
-c_corner = [0.10 0.10 0.10];
-
-% ----------------------------------------------------------------
-% 1. Reconstruct the algorithm's [0,1] chord-span normalization
-% ----------------------------------------------------------------
-span = diagStruct.peak_idx:diagStruct.end_idx;
-xc   = diagStruct.bin_centers(span);
-yc   = diagStruct.counts_smooth(span);
-
-peak_count = diagStruct.counts_smooth(diagStruct.peak_idx);
-x_range = xc(end) - xc(1);
-y_range = peak_count - yc(end);
-
-x_n = (xc - xc(1)) / x_range;     % peak -> 0,  tail anchor -> 1
-y_n = (yc - yc(end)) / y_range;   % tail -> 0,  peak        -> 1
-
-% Corner = max perpendicular distance (already computed in
-% normalized space by rosinThreshold)
-dperp = diagStruct.perp_dist(span);
-[~, mi] = max(dperp);
-
-% Foot of the perpendicular on the chord (for the drop line)
-P0   = [x_n(1),  y_n(1)];                 % ~(0,1)
-P1   = [x_n(end), y_n(end)];              % ~(1,0)
-vhat = (P1 - P0) / norm(P1 - P0);
-Pc   = [x_n(mi), y_n(mi)];
-foot = P0 + dot(Pc - P0, vhat) * vhat;
-
-% ----------------------------------------------------------------
-% 2. Plot
-% ----------------------------------------------------------------
-if show, fig = figure(); else, fig = figure('Visible', 'off'); end
 ax = axes('Parent', fig);
 hold(ax, 'on');
 
-area(ax, x_n, y_n, 'FaceColor', c_curve, 'FaceAlpha', 0.20, ...
-    'EdgeColor', c_curve, 'LineWidth', 1.5);
-plot(ax, [P0(1) P1(1)], [P0(2) P1(2)], '-', ...
-    'Color', c_chord, 'LineWidth', 1.5);
-plot(ax, [Pc(1) foot(1)], [Pc(2) foot(2)], ':', ...
-    'Color', c_corner, 'LineWidth', 1.5);
-plot(ax, Pc(1), Pc(2), 'o', 'MarkerSize', 9, ...
-    'MarkerEdgeColor', c_corner, 'MarkerFaceColor', c_corner);
+% 3. Plot the curve, chord, and deviation
+plot(ax, x_n, y_n, '-k', 'LineWidth', 2, 'DisplayName', 'Normalized Histogram');
+plot(ax, [0 1], [1 0], '--k', 'LineWidth', 1.5, 'DisplayName', 'Chord');
+plot(ax, [x0 x_proj], [y0 y_proj], '-r', 'LineWidth', 2, 'DisplayName', 'Max Deviation (d_b)');
+scatter(ax, x0, y0, 60, 'r', 'filled', 'DisplayName', 'Optimal Threshold (\theta^*)');
 
-xlabel(ax, 'Normalized Score [-]');
-ylabel(ax, 'Normalized Count [-]');
-legend(ax, {'Histogram', 'Chord', 'd_{max}', ...
-    sprintf('Corner (\\theta^{*} = %.4f)', th)}, ...
-    'Location', 'northeast', 'Box', 'off');
-xlim(ax, [0 1]); ylim(ax, [0 1]);
-grid(ax, 'on'); box(ax, 'on');
-pbaspect(ax, [4 3 1]);
-set(ax, 'FontSize', 24, 'FontName', 'Times New Roman');
-set(fig, 'DefaultTextFontName', 'Times New Roman', ...
-    'DefaultAxesFontName', 'Times New Roman');
-journal.exportTight3DScatterPlots(fig, [basePath name '-Norm.pdf']);
+% 4. Format axes and labels (No title, per requirements)
+xlabel(ax, '$\tilde{x}_b$', 'Interpreter', 'latex');
+ylabel(ax, '$\tilde{y}_b$', 'Interpreter', 'latex');
+grid(ax, 'on');
+box(ax, 'on');
+
+% 5. Set axis limits tightly to the data
+xlim(ax, [-0.05, 1.05]);
+ylim(ax, [-0.05, 1.05]);
+axis(ax, 'square'); % Maintain proper geometric aspect for the diagonal projection
+
+pbaspect(ax, [640 640 1]);
+
+% 6. Apply publication typography
+set(ax, 'FontSize', 22, 'FontName', 'Times New Roman');
+set(fig, 'DefaultTextFontName', 'Times New Roman', 'DefaultAxesFontName', 'Times New Roman');
+legend(ax, 'Location', 'northeast', 'FontSize', 18);
+
+% 7. Export via the tight cropping routine to the manuscript directory
+savePath = ['/home/alexandercrain/Dropbox/Graduate Documents/Doctor of Philosophy/Publications/Journals/AIAA Journal of Spacecraft and Rockets/Event_Based_Spacecraft_Representation_Using_Inter_Event_Interval_Adaptive_Time_Surfaces/results/generated-figures/' name];
+journal.exportTight3DScatterPlots(fig, savePath);
+hold(ax, 'off');
 end

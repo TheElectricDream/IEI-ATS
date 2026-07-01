@@ -1,0 +1,62 @@
+function [] = showRosinScoreDistribution(diag, thresh_val, name, show)
+% SHOWROSINSCOREDISTRIBUTION  Bar plot of normalized active scores, smoothed scores, and threshold.
+%
+%   SHOWROSINSCOREDISTRIBUTION(DIAG, THRESH_VAL, NAME, SHOW) 
+%
+%   Inputs:
+%     diag       - Struct output from testing.rosinThreshold.
+%     thresh_val - Scalar threshold value.
+%     name       - String. Filename for the exported figure.
+%     show       - Logical. If true, displays the figure; otherwise hidden.
+
+% 1. Format the data and normalize the Y-axis to [0, 1]
+x_data = diag.bin_centers(:);
+norm_factor = max(diag.counts(:)); % Find the peak count for normalization
+
+y_data = diag.counts(:) / norm_factor;
+y_smooth = diag.counts_smooth(:) / norm_factor;
+
+% 2. Initialize figure visibility
+if show
+    fig = figure();
+else
+    fig = figure('Visible', 'off');
+end
+ax = axes('Parent', fig);
+hold(ax, 'on');
+
+% 3. Plot the histogram, smoothed curve, noise peak, and threshold
+bar(ax, log10(x_data), log10(y_data), 'FaceColor', [0.75 0.75 0.75], 'EdgeColor', 'none', 'DisplayName', 'Raw Counts');
+plot(ax, x_data, y_smooth, '-k', 'LineWidth', 1.5, 'DisplayName', 'Smoothed Counts');
+xline(ax, diag.bin_centers(diag.peak_idx), '--b', 'LineWidth', 1.5, 'DisplayName', 'Noise Peak (b_p)');
+xline(ax, thresh_val, '-r', 'LineWidth', 2, 'DisplayName', 'Threshold (\theta^{\star})');
+
+% 4. Format axes and labels (No title, per requirements)
+xlabel(ax, 'Normalized Coherence Score (C)');
+ylabel(ax, 'Normalized Pixel Count (-)'); 
+grid(ax, 'on');
+box(ax, 'on');
+
+% 5. Set axis limits tightly to the data
+if length(x_data) > 1
+    xlim(ax, [min(x_data), max(x_data)]);
+end
+y_range = max(y_data) - min(y_data);
+if y_range > 0
+    ylim(ax, [min(y_data), max(y_data) + (0.05 * y_range)]); % Bottom is 0 for bars
+end
+
+% 6. Apply publication typography & Aspect Ratio Lock
+set(ax, 'FontSize', 16, 'FontName', 'Times New Roman');
+set(fig, 'DefaultTextFontName', 'Times New Roman', 'DefaultAxesFontName', 'Times New Roman');
+legend(ax, 'Location', 'northeast', 'FontSize', 14);
+
+% Enforce 4:3 aspect ratio and lock it against outer dimension changes
+pbaspect(ax, [640 480 1]);
+set(ax, 'ActivePositionProperty', 'position'); 
+
+% 7. Export via the tight cropping routine to the manuscript directory
+savePath = ['/home/alexandercrain/Dropbox/Graduate Documents/Doctor of Philosophy/Publications/Journals/AIAA Journal of Spacecraft and Rockets/Event_Based_Spacecraft_Representation_Using_Inter_Event_Interval_Adaptive_Time_Surfaces/results/generated-figures/' name];
+journal.exportTight3DScatterPlots(fig, savePath);
+hold(ax, 'off');
+end
