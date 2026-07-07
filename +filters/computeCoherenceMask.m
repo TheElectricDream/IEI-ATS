@@ -60,28 +60,33 @@ function [norm_trace_map, norm_trace_map_nofilt, norm_regularity_map, ...
     % ----------------------------------------------------------------
 
     if genFigure
+
         % Temporal binning at pixel-equivalent resolution
         Nt_nofilt = max(round(t_interval / (r_s * t_interval)), 1);
         tb_nofilt = min(floor(Nt_nofilt * (sorted_t - min(sorted_t)) / t_interval) + 1, Nt_nofilt);
     
         % 3D event histogram at full spatial resolution
         V_nofilt = accumarray([sorted_x, sorted_y, tb_nofilt], 1, [imgSz(1) imgSz(2) Nt_nofilt]);
-    
+
         kr_x_nofilt = round(r_s * imgSz(1));
         kr_y_nofilt = round(r_s * imgSz(2));
         kr_t_nofilt = round(r_s * Nt_nofilt);
-    
-        [kx_nofilt, ky_nofilt, kt_nofilt] = ndgrid(-kr_x_nofilt:kr_x_nofilt,...
-            -kr_y_nofilt:kr_y_nofilt, -kr_t_nofilt:kr_t_nofilt);
-    
-        % Normalize kernel indices back to the same units as the point cloud
-        K_dist_nofilt = sqrt((kx_nofilt/imgSz(1)).^2 + (ky_nofilt/imgSz(2)).^2 + (kt_nofilt/Nt_nofilt).^2);
-        K_nofilt = double(K_dist_nofilt <= r_s); % 1 inside the ball, 0 outside
-    
-        density = convn(V_nofilt, K_nofilt, 'same');
+
+        % Create a 2D Spatial Kernel (Flat Disk)
+        [kx_nofilt, ky_nofilt] = ndgrid(-kr_x_nofilt:kr_x_nofilt, -kr_y_nofilt:kr_y_nofilt);
+        K_xy_dist_nofilt = sqrt((kx_nofilt/imgSz(1)).^2 + (ky_nofilt/imgSz(2)).^2);
+        K_xy_nofilt = double(K_xy_dist_nofilt <= r_s);
+
+        % Create a 1D Temporal Kernel (Line)
+        % Reshaped to 1x1xL to apply strictly along the 3rd dimension (time)
+        K_t_nofilt = ones(1, 1, 2 * kr_t_nofilt + 1);
+
+        % Apply sequentially (O(N^2) + O(N) instead of O(N^3))
+        density_xy_nofilt = convn(V_nofilt, K_xy_nofilt, 'same');
+        density_nofilt = convn(density_xy_nofilt, K_t_nofilt, 'same');
     
         % Sample per-event, then max per-pixel
-        sum_exp_dist_nofilt = density(sub2ind(size(V_nofilt), sorted_x, sorted_y, tb_nofilt));
+        sum_exp_dist_nofilt = density_nofilt(sub2ind(size(V_nofilt), sorted_x, sorted_y, tb_nofilt));
     
         sum_exp_dist_map_nofilt = accumarray([sorted_x, sorted_y], sum_exp_dist_nofilt, imgSz, @max, 0);
     
@@ -105,18 +110,23 @@ function [norm_trace_map, norm_trace_map_nofilt, norm_regularity_map, ...
     
     % 3D event histogram at full spatial resolution
     V = accumarray([filtered_x, filtered_y, tb], 1, [imgSz(1) imgSz(2) Nt]);
-      
+
     kr_x = round(r_s * imgSz(1));
     kr_y = round(r_s * imgSz(2));
     kr_t = round(r_s * Nt);
-    
-    [kx, ky, kt] = ndgrid(-kr_x:kr_x, -kr_y:kr_y, -kr_t:kr_t);
-    
-    % Normalize kernel indices back to the same units as the point cloud
-    K_dist = sqrt((kx/imgSz(1)).^2 + (ky/imgSz(2)).^2 + (kt/Nt).^2);
-    K = double(K_dist <= r_s); % 1 inside the ball, 0 outside
-    
-    density = convn(V, K, 'same');
+
+    % Create a 2D Spatial Kernel (Flat Disk)
+    [kx, ky] = ndgrid(-kr_x:kr_x, -kr_y:kr_y);
+    K_xy_dist = sqrt((kx/imgSz(1)).^2 + (ky/imgSz(2)).^2);
+    K_xy = double(K_xy_dist <= r_s);
+
+    % Create a 1D Temporal Kernel (Line)
+    % Reshaped to 1x1xL to apply strictly along the 3rd dimension (time)
+    K_t = ones(1, 1, 2 * kr_t + 1);
+
+    % Apply sequentially 
+    density_xy = convn(V, K_xy, 'same');
+    density = convn(density_xy, K_t, 'same');
     
     % Sample per-event, then max per-pixel
     sum_exp_dist = density(sub2ind(size(V), filtered_x, filtered_y, tb));

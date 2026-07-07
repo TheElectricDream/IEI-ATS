@@ -1,150 +1,130 @@
-function [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff] = ...
-    computeNeighborhoodStats(sorted_t, unique_idx, pos, ...
-    group_ends, imgSz)
-% COMPUTENEIGHBORHOODSTATS Per-pixel timestamp and inter-event interval (IEI) statistics from grouped event streams.
-%
-%     [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff] = ...
-%         computeNeighborhoodStats(sorted_t, unique_idx, pos, ...
-%         group_ends, imgSz)
-%
-%     Inputs:
-%       sorted_t   - [M x 1] Event timestamps grouped by linear pixel
-%                    index and sorted ascending within each group.
-%       unique_idx - [K x 1] Linear pixel index of each group.
-%       pos        - [K x 1] Start index of each group in sorted_t.
-%                    Must be ascending; groups must contiguously
-%                    partition sorted_t.
-%       group_ends - [K x 1] End index of each group in sorted_t.
-%       imgSz      - [1 x 2] Image dimensions [nRows, nCols].
-%
-%     Outputs (all [imgSz] double maps; zero at pixels with no events):
-%       t_mean      - Mean timestamp.
-%       t_std       - Sample (Bessel-corrected) standard deviation of
-%                     timestamps. Zero for single-event pixels.
-%       t_max       - Maximum timestamp.
-%       t_min       - Minimum timestamp.
-%       t_mean_diff - Mean IEI. Zero for single-event pixels.
-%       t_std_diff  - Sample standard deviation of IEIs. Zero for
-%                     pixels with fewer than three events (fewer than
-%                     two IEIs).
-%
-%     Notes:
-%       Fully vectorized; no per-pixel loops. Min/max are read from
-%       group boundaries; means use prefix-sum (cumsum) subtraction;
-%       standard deviations use the one-pass identity
-%       var(x) = E[x^2] - E[x]^2 with Bessel correction; the IEI mean
-%       uses the telescoping identity
-%       mean(diff(x)) = (x(end) - x(1)) / (n - 1); IEI squared sums are
-%       scattered per group with accumarray after masking diffs that
-%       cross group boundaries.
-%
-%       The one-pass variance formula can suffer catastrophic
-%       cancellation when magnitudes are large relative to spread
-%       (Higham 2002, "Accuracy and Stability of Numerical Algorithms,"
-%       2nd ed., Ch. 1). Timestamps here are window-relative, keeping
-%       magnitudes moderate; a max(., 0) clamp guards residual
-%       floating-point noise.
-%
-%       t_mean_diff feeds the coherence IEI regularity rule and, via
-%       EMA smoothing, the IEI-ATS per-pixel tau mapping.
-%
-%     See also COHERENCE.COMPUTECOHERENCEMASK.
+function [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff, fcn_time] = ...
+    computeNeighborhoodStats(t_sorted, unique_idx, pos, ...
+    group_ends, img_size)
+    % COMPUTENEIGHBORHOODSTATS Per-pixel timestamp and inter-event interval (IEI)
+    % statistics from grouped event streams.
+    % 
+    % [t_mean, t_std, t_max, t_min, t_mean_diff, t_std_diff] = ...
+    %     computeNeighborhoodStats(t_sorted, unique_idx, pos, ...
+    %     group_ends, img_size)
+    % 
+    % Inputs:
+    %   t_sorted   - [M x 1] Event timestamps grouped by linear pixel
+    %                index and sorted ascending within each group
+    %   linear_idx - [M x 1] Linear pixel index of each group
+    %   unique_idx - [K x 1] Unique pixel index of each group
+    %   pos        - [K x 1] Start index of each group in t_sorted
+    %                Must be ascending; groups must contiguously
+    %                partition t_sorted
+    %   group_ends - [K x 1] End index of each group in t_sorted
+    %   img_size   - [1 x 2] Image dimensions [nRows, nCols]
+    % 
+    % Outputs (all [img_size] double maps; zero at pixels with no events):
+    %   t_mean      - Mean timestamp
+    %   t_std       - Sample (Bessel-corrected) standard deviation of
+    %                 timestamps. Zero for single-event pixels
+    %   t_max       - Maximum timestamp
+    %   t_min       - Minimum timestamp
+    %   t_mean_diff - Mean IEI. 
+    %   t_std_diff  - Sample standard deviation of IEIs. 
 
-    % ----------------------------------------------------------------
-    % 0. Initialize output maps
-    % ----------------------------------------------------------------
-    t_mean      = zeros(imgSz);
-    t_std       = zeros(imgSz);
-    t_max       = zeros(imgSz);
-    t_min       = zeros(imgSz);
-    t_mean_diff = zeros(imgSz);
-    t_std_diff  = zeros(imgSz);
+    arguments
+        t_sorted   (:,1) double
+        unique_idx (:,1) double {mustBeInteger, mustBePositive}
+        pos        (:,1) double {mustBeInteger, mustBePositive}
+        group_ends (:,1) double {mustBeInteger, mustBePositive}
+        img_size   (1,2) double {mustBeInteger, mustBePositive}
+    end
+
+    % Assertions
+    assert(numel(pos) == numel(unique_idx) && ...
+           numel(pos) == numel(group_ends), ...
+        'pos, group_ends, and unique_idx must have equal length');
+    assert(isempty(pos) || issorted(pos, 'strictascend'), ...
+        'pos must be strictly ascending');
+    assert(all(group_ends >= pos), ...
+        'each group_ends(k) must be >= pos(k)');
+
+    % Start internal timer
+    tic;
+
+    % Initialize output maps
+    t_mean      = zeros(img_size);
+    t_std       = zeros(img_size);
+    t_max       = zeros(img_size);
+    t_min       = zeros(img_size);
+    t_mean_diff = zeros(img_size);
+    t_std_diff  = zeros(img_size);
 
     K = numel(unique_idx);
     if K == 0
         return;
     end
 
-    % ----------------------------------------------------------------
-    % 1. Group counts
-    % ----------------------------------------------------------------
-    counts = group_ends - pos + 1;         % [K x 1] events per pixel
+    % Get the minimum & maximum time for each grouping (x,y)
+    minimum_sorted_t = t_sorted(pos);
+    maximum_sorted_t = t_sorted(group_ends);
 
-    % ----------------------------------------------------------------
-    % 2. Min / max — direct indexing (sorted within group)
-    % ----------------------------------------------------------------
-    mn = sorted_t(pos);
-    mx = sorted_t(group_ends);
+    % Number of events and inter-event intervals in each grouping
+    event_counts = group_ends - pos + 1;
+    iei_counts   = event_counts - 1;
+ 
+    % Remove each grouping's first timestamp so the shifted values are
+    % non-negative and bounded 
+    t_sorted_shifted    = t_sorted - repelem(minimum_sorted_t, event_counts);
+    cumsum_t_shifted    = [0; cumsum(t_sorted_shifted)];
+    cumsum_t_shifted_sq = [0; cumsum(t_sorted_shifted.^2)];
+ 
+    event_group_t_sums  = cumsum_t_shifted(group_ends + 1) ...
+                        - cumsum_t_shifted(pos);
+    event_group_t_sumsq = cumsum_t_shifted_sq(group_ends + 1) ...
+                        - cumsum_t_shifted_sq(pos);
+ 
+    % Calculate the mean time for each grouping (x,y)
+    event_group_means = event_group_t_sums ./ event_counts + minimum_sorted_t;
+ 
+    % Bessel-corrected variance of the timestamps, and zero for single-event
+    % groupings
+    event_group_t_vars = (event_group_t_sumsq ...
+        - event_group_t_sums.^2 ./ event_counts) ./ max(event_counts - 1, 1);
+    event_group_t_vars(event_counts == 1) = 0;
+    event_group_stds = sqrt(max(event_group_t_vars, 0));
+ 
+    % Within-group diffs of grouping k
+    t_sorted_diffs = diff(t_sorted);
+ 
+    % Calculate the telescoping sum of within-group IEIs
+    event_group_iei_sums = maximum_sorted_t - minimum_sorted_t;
+ 
+    cumsum_iei_sq = [0; cumsum(t_sorted_diffs.^2)];
+    event_group_iei_sumsq = cumsum_iei_sq(group_ends) - cumsum_iei_sq(pos);
+ 
+    % Calculate the mean IEI
+    event_group_mean_diffs = zeros(K, 1);
+    has_intervals = iei_counts >= 1;
+    event_group_mean_diffs(has_intervals) = ...
+        event_group_iei_sums(has_intervals) ./ iei_counts(has_intervals);
+ 
+    % Bessel-corrected standard deviation of the IEIs, and zero for 
+    % groupings with fewer then two points
+    event_group_iei_vars = zeros(K, 1);
+    has_multiple_intervals = iei_counts >= 2;
+    event_group_iei_vars(has_multiple_intervals) = ...
+        (event_group_iei_sumsq(has_multiple_intervals) ...
+        - event_group_iei_sums(has_multiple_intervals).^2 ...
+        ./ iei_counts(has_multiple_intervals)) ...
+        ./ (iei_counts(has_multiple_intervals) - 1);
+    event_group_std_diffs = sqrt(max(event_group_iei_vars, 0));
 
-    % ----------------------------------------------------------------
-    % 3. Mean — prefix-sum subtraction
-    % ----------------------------------------------------------------
-    % Prepend zero so that cs(end+1) - cs(start) gives the group sum
-    % without special-casing the first group.
-    cs      = [0; cumsum(sorted_t)];
-    grp_sum = cs(group_ends + 1) - cs(pos);
-    mu      = grp_sum ./ counts;
+    % Scatter into image maps
+    t_mean(unique_idx)      = event_group_means;
+    t_std(unique_idx)       = event_group_stds;
+    t_max(unique_idx)       = maximum_sorted_t;
+    t_min(unique_idx)       = minimum_sorted_t;
+    t_mean_diff(unique_idx) = event_group_mean_diffs;
+    t_std_diff(unique_idx)  = event_group_std_diffs;
 
-    % ----------------------------------------------------------------
-    % 4. Std — prefix-sum of squares + algebraic variance
-    % ----------------------------------------------------------------
-    %   var(x) = [ sum(x^2) - n * mu^2 ] / (n - 1)
-    cs2      = [0; cumsum(sorted_t .^ 2)];
-    grp_sum2 = cs2(group_ends + 1) - cs2(pos);
-
-    denom    = max(counts - 1, 1);         % protect single-event pixels
-    variance = (grp_sum2 - counts .* mu.^2) ./ denom;
-    sd       = sqrt(max(variance, 0));     % clamp float noise
-    sd(counts == 1) = 0;
-
-    % ----------------------------------------------------------------
-    % 5. IEI mean — telescoping sum identity
-    % ----------------------------------------------------------------
-    %   mean(diff(x)) = (x(end) - x(1)) / (numel(x) - 1)
-    diff_counts = counts - 1;
-    mu_d = (mx - mn) ./ max(diff_counts, 1);
-    mu_d(counts <= 1) = 0;
-
-    % ----------------------------------------------------------------
-    % 6. IEI std — vectorized diff with cross-group masking
-    % ----------------------------------------------------------------
-    M     = numel(sorted_t);
-    d_all = diff(sorted_t);               % [M-1 x 1]
-
-    % 6a. Build per-element group labels via cumsum delta trick:
-    %     place a 1 at every group start, cumsum maps each element
-    %     to its group index.
-    delta     = zeros(M, 1);
-    delta(pos) = 1;
-    g         = cumsum(delta);            % g(i) = group index of sorted_t(i)
-
-    % 6b. Identify within-group diffs (exclude boundary diffs where
-    %     consecutive elements belong to different groups).
-    g_diff = g(1:end-1);                  % group label for each diff
-    within = true(M - 1, 1);
-    if K > 1
-        within(group_ends(1:end-1)) = false;
-    end
-
-    % 6c. Scatter sum(d^2) per group via accumarray
-    d_w    = d_all(within);
-    gw     = g_diff(within);
-    sum_d2 = accumarray(gw, d_w .^ 2, [K, 1]);
-
-    %   var(d) = [ sum(d^2)/n - mu_d^2 ] * n/(n-1)    (Bessel)
-    n_iei = max(diff_counts, 1);
-    var_d = (sum_d2 ./ n_iei - mu_d .^ 2) .* n_iei ./ max(n_iei - 1, 1);
-    sd_d  = sqrt(max(var_d, 0));
-    sd_d(counts <= 2) = 0;               % need >= 2 IEIs for std
-
-    % ----------------------------------------------------------------
-    % 7. Scatter into image maps
-    % ----------------------------------------------------------------
-    t_mean(unique_idx)      = mu;
-    t_std(unique_idx)       = sd;
-    t_max(unique_idx)       = mx;
-    t_min(unique_idx)       = mn;
-    t_mean_diff(unique_idx) = mu_d;
-    t_std_diff(unique_idx)  = sd_d;
+    % Get total function time
+    fcn_time = toc; 
 
 end

@@ -28,7 +28,7 @@ function [] = showScatterPlotOfRuleMaps3D(map, name, show)
     
     ax  = axes('Parent', fig);
     scatter3(x_trimmed, y_trimmed, z_trimmed, ...
-        100, z_trimmed, '.');
+        50, z_trimmed, '.');
     xlabel('X_{norm} [-]')
     ylabel('Y_{norm} [-]')
     zlabel('t_{norm} [-]')

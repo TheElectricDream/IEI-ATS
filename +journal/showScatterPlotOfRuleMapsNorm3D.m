@@ -1,31 +1,33 @@
-function [] = showScatterPlotOfEventVector(x, y, z, name, show)
-% VECTORSTOSCATTERPLOT  3D scatter plot from raw coordinate vectors.
+function [] = showScatterPlotOfRuleMapsNorm3D(map, name, show)
+% MAPTOSCATTERPLOT  3D scatter plot from a 2D value map.
 %
-%   VECTORSTOSCATTERPLOT(X, Y, Z, HOLDFIG) displays a 3D scatter
-%   plot colored by z-value.
+%   MAPTOSCATTERPLOT(MAP, HOLDFIG) converts a 2D map to a point
+%   cloud and displays it as a 3D scatter plot colored by z-value.
 %
 %   Inputs:
-%     x, y, z - [N x 1] Coordinate vectors.
-%     holdFig - Logical. If true, overlay on existing figure 16.
+%     map     - [H x W] 2D value map.
+%     holdFig - Logical. If true, overlay on existing figure 15.
 %
-%   See also: plot.mapToScatterPlot
+%   See also: process.generateMeshFromFrame, plot.mapToSurfPlot
 
-    x_trimmed = x./640;
-    y_trimmed = y./480;
-    % Normalize z to range [0,1]
-    z_min = min(z(:));
-    z_max = max(z(:));
-    if z_max > z_min
-        z_trimmed = (z - z_min) ./ (z_max - z_min);
-    else
-        z_trimmed = zeros(size(z)); % constant input -> map to zero
-    end
+    [pointCloud] = process.generateMeshFromFrame(map');
+
+    x_trimmed = pointCloud(~isnan(pointCloud(:,3)), 1)./640;
+    y_trimmed = pointCloud(~isnan(pointCloud(:,3)), 2)./480;
+    z_trimmed = pointCloud(~isnan(pointCloud(:,3)), 3);
+
+    z_trimmed(z_trimmed>1) = [];
 
     if show
+
         fig = figure();
+
     else
-        fig = figure('Visible', 'off'); % Create a new figure if not holding
+
+        fig = figure('Visible', 'off');
+        
     end
+    
     ax  = axes('Parent', fig);
     scatter3(x_trimmed, y_trimmed, z_trimmed, ...
         50, z_trimmed, '.');
@@ -40,10 +42,12 @@ function [] = showScatterPlotOfEventVector(x, y, z, name, show)
     zlim(ax, [0 1]);
     camlight(ax, 'headlight');
     lighting(ax, 'gouraud');
+    view(ax, 3);
     colormap(jet);
-    % colorbar;
+    %colorbar;
     set(gca, 'FontSize', 16, 'FontName', 'Times New Roman');
     set(gcf, 'DefaultTextFontName', 'Times New Roman', 'DefaultAxesFontName', 'Times New Roman');
+
     journal.exportTight3DScatterPlots(gcf, ['/home/alexandercrain/Dropbox/Graduate Documents/Doctor of Philosophy/Publications/Journals/AIAA Journal of Spacecraft and Rockets/Event_Based_Spacecraft_Representation_Using_Inter_Event_Interval_Adaptive_Time_Surfaces/results/generated-figures/' name]);
 
 end

@@ -1,36 +1,15 @@
-function [map, map_raw] = rejectPolarityOutliers(map, map_raw, n_sigma)
-% REJECTPOLARITYOUTLIERS One-sided, per-polarity outlier replacement with the polarity median.
+function [map, map_raw, outlier_mask] = rejectPolarityOutliers(map, map_raw, n_sigma)
+% REJECTPOLARITYOUTLIERS Robust, one-sided, per-polarity outlier replacement using MAD.
 %
-%     [map, map_raw] = rejectPolarityOutliers(map, map_raw, n_sigma)
-%
-%     Inputs:
-%       map     - Signed array; positive and negative values are
-%                 treated as separate polarity populations (zeros
-%                 belong to neither).
-%       map_raw - Companion array of the same size, clipped with the
-%                 outlier mask derived from map so that display and
-%                 feedback paths stay consistent.
-%       n_sigma - Positive scalar; number of standard deviations
-%                 defining the outlier cut.
+%     [map, map_raw, outlier_mask] = rejectPolarityOutliers(map, map_raw, n_sigma)
 %
 %     Outputs:
-%       map     - Input with outliers replaced by the median of its
-%                 own polarity population.
-%       map_raw - Input with the same outlier pixels replaced by the
-%                 median of map_raw over that polarity's mask.
-%
-%     Notes:
-%       The cut is ONE-SIDED, away from zero: positive values are
-%       flagged only if above mu + n_sigma*sigma of the positive
-%       population; negative values only if below mu - n_sigma*sigma
-%       of the negative population. Values near zero are never
-%       flagged.
-%
-%       Statistics (mean, std, median) are computed in a single pass
-%       over each polarity population including the outliers
-%       themselves; this is not iterative sigma clipping.
-%
-%     See also MEDIAN, STD, FILLOUTLIERS.
+%       map          - Input with outliers replaced by the median of its population.
+%       map_raw      - Companion array updated identically.
+%       outlier_mask - Logical array of the same size, true where outliers were found.
+
+    % Initialize the universal tracking mask
+    outlier_mask = false(size(map));
     
     for pol = [1, -1]
     
@@ -44,16 +23,24 @@ function [map, map_raw] = rejectPolarityOutliers(map, map_raw, n_sigma)
     
         if isempty(vals), continue; end
     
-        mu  = mean(vals);
-        sig = std(vals);
         med = median(vals);
+        mad_val = median(abs(vals - med));
+        
+        robust_sig = 1.4826 * mad_val;
+        if robust_sig == 0
+            robust_sig = std(vals);
+        end
     
         if pol == 1
-            outliers = map > (mu + n_sigma * sig);
+            outliers = map > (med + n_sigma * robust_sig);
         else
-            outliers = map < (mu - n_sigma * sig);
+            outliers = map < (med - n_sigma * robust_sig);
         end
-
+        
+        % Record these specific polarity outliers into the universal mask
+        outlier_mask(outliers) = true;
+        
+        % Replace outliers with the robust median
         map(outliers)     = med;
         map_raw(outliers) = median(map_raw(mask));
     end

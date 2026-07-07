@@ -1,86 +1,15 @@
-function [normalized_output_frame, time_surface_map_raw, ...
-    tau_filtered, adaptive_gains] = ...
+function [lats_outputs] = ...
     localAdaptiveTimeSurface(t_mean, time_surface_map_prev, ...
     alts_params, filter_mask, polarity_map, counts)
-% LOCALADAPTIVETIMESURFACE  IEI-ATS adaptive local time surface.
-%
-%   [NORMALIZED_OUTPUT_FRAME, TIME_SURFACE_MAP_RAW, TAU_FILTERED,
-%   ADAPTIVE_GAINS] = LOCALADAPTIVETIMESURFACE(T_MEAN,
-%   TIME_SURFACE_MAP_PREV, ALTS_PARAMS, FILTER_MASK, POLARITY_MAP,
-%   COUNTS) computes the Adaptive Local Time Surface (ALTS) using an
-%   IIR/EMA accumulator with per-pixel adaptive decay driven by local
-%   inter-event-interval statistics, an asymmetric attack-release
-%   envelope, and Carandini-Heeger divisive normalization.
-%
-%   This is the core contribution of the IEI-ATS algorithm.
-%
-%   Inputs:
-%     t_mean               - [imgSz] Per-pixel EMA-smoothed mean IEI.
-%                            Used directly as the active decay time
-%                            constant. NaN values are treated as zero.
-%     time_surface_map_prev - [imgSz] Previous frame's raw (unnorm.)
-%                            surface state. Feeds back into the EMA.
-%     alts_params          - Struct with fields:
-%       .dt                  - Frame interval [s] (numerator for alpha)
-%       .filter_sigma        - Gaussian smoothing sigma [pixels]
-%       .filter_size         - Gaussian kernel size [pixels, odd]
-%       .surface_tau_release - Idle-pixel release time constant [s]
-%       .div_norm_exp        - Divisive normalization exponent gamma
-%       .symmetric_tone_scale - Sigmoid tone mapping scale parameter
-%     filter_mask          - [imgSz] Coherence filter mask (0 or 1).
-%                            Events at zero-mask pixels are excluded.
-%     polarity_map         - [imgSz] Signed polarity accumulation for
-%                            current frame. Typically computed as:
-%                            accumarray([x,y], p_signed, imgSz, @sum, 0)
-%     counts               - [imgSz] Per-pixel event count for the
-%                            current frame (used in divisive norm.).
-%
-%   Outputs:
-%     normalized_output_frame - [imgSz] Display surface in [0, 1],
-%                               after divisive norm. + tone mapping.
-%     time_surface_map_raw    - [imgSz] Raw bipolar EMA surface
-%                               (unnormalized). Feed back as prev.
-%     tau_filtered            - [imgSz] Spatially smoothed active tau.
-%     adaptive_gains          - [imgSz] Per-pixel blending coefficient
-%                               alpha_eff after spatial smoothing.
-%
-%   Algorithm:
-%     1. Map IEI directly to active tau: tau = max(IEI, eps).
-%     2. Spatially smooth tau with a Gaussian kernel.
-%     3. Build activity indicator from coherence-filtered polarity,
-%        expanded via morphological dilation (disk, r=1).
-%     4. Blend attack/release: active pixels use tau_active, idle
-%        pixels use tau_release.
-%     5. Compute coupled gain-decay: alpha = 1 - exp(-dt/tau_eff).
-%     6. EMA update: S = alpha*u + (1-alpha)*S_prev.
-%     7. Suppress inactive pixels (zero outside activity mask).
-%     8. Divisive normalization: S / (sigma^gamma + C^gamma).
-%     9. Tone mapping via symmetric sigmoid.
-%
-%   Notes:
-%     - IIR/EMA-based: recursive update, NOT reset-based. The surface
-%       preserves signed polarity (+/- events distinguishable).
-%     - Bipolar output (pre-normalization) in approximately [-1, +1].
-%       Tone-mapped output in [0, 1] with 0.5 = zero.
-%     - Raw unnormalized surface must feed back into next frame
-%       (not the normalized output — this prevents self-sustaining
-%       residuals from divisive normalization feedback).
-%     - Coordinates: x = row, y = col.
-%
-%   See also: accumulator.timeSurface,
-%             accumulator.adaptiveGlobalDecay,
-%             coherence.computeCoherenceMask,
-%             process.symmetricToneMappingNorm
-
-    % ----------------------------------------------------------------
-    % 0. Parse parameters
-    % ----------------------------------------------------------------
+    % LOCALADAPTIVETIMESURFACE  IEI-ATS adaptive local time surface.
+    
+    % Extract parameters
     surface_tau_release  = alts_params.surface_tau_release;
     dt                   = alts_params.dt;
-    filter_sigma         = alts_params.filter_sigma;
-    filter_size          = alts_params.filter_size;
     div_norm_exp         = alts_params.div_norm_exp;
     symmetric_tone_scale = alts_params.symmetric_tone_scale;
+    sigma_base           = alts_params.sigma_base;
+    sigma_outlier        = alts_params.sigma_outlier;
 
     % Sanitize IEI input
     t_mean(isnan(t_mean)) = 0;
@@ -88,11 +17,7 @@ function [normalized_output_frame, time_surface_map_raw, ...
     % ----------------------------------------------------------------
     % 1. Time constant mapping (identity: tau = IEI)
     % ----------------------------------------------------------------
-    tau_active = max(t_mean, eps);
-
-    % Spatial smoothing to prevent pixel-sharp transitions
-    tau_filtered = imgaussfilt(tau_active, filter_sigma, ...
-        'FilterSize', filter_size);
+    tau_filtered = max(t_mean, eps);
 
     % ----------------------------------------------------------------
     % 2. Activity indicator (morphological dilation)
@@ -101,79 +26,81 @@ function [normalized_output_frame, time_surface_map_raw, ...
     % sees only events that survive filtering. Without this, filtered
     % pixels appear "active" and get tau_active instead of tau_release.
     masked_input = polarity_map .* filter_mask;
+    
+    % Apply outlier rejection to filter out any points that are way too big
+    [masked_input, ~, outlier_mask] =...
+        stats.rejectPolarityOutliers(masked_input, masked_input, sigma_outlier);
 
     activity_indicator = single(masked_input ~= 0);
     activity_indicator(isnan(activity_indicator)) = 0;
 
-    % Morphological dilation bridges sub-pixel gaps without the
-    % amplitude amplification that Gaussian blur would cause.
-    se = strel('disk', 2);
-    activity_blurred = imdilate(activity_indicator, se);
-
     % ----------------------------------------------------------------
     % 3. Asymmetric attack-release envelope
     % ----------------------------------------------------------------
-    tau_effective = tau_filtered .* activity_blurred + ...
-                    surface_tau_release .* (1 - activity_blurred);
+    tau_effective = tau_filtered .* activity_indicator + ...
+                    surface_tau_release .* (1 - activity_indicator);
 
     % ----------------------------------------------------------------
-    % 4. Coupled gain-decay coefficient
+    % 4. Coupled decay factor (Inverted Gain)
     % ----------------------------------------------------------------
-    adaptive_gains = 1 - exp(-dt ./ tau_effective);
+    gamma_min = 0.15; 
     
-    % REMOVED: adaptive_gains(activity_blurred == 0) = 0;
-    % Let the surface_tau_release parameter handle the decay of idle pixels!
+    % Map the exponential decay so it bottoms out at gamma_min instead of 0
+    raw_decay = exp(-dt ./ tau_effective);
+    adaptive_gains = gamma_min + (1 - gamma_min) .* raw_decay;
     
-    % Smooth the blending coefficient to soften spatial boundaries
-    adaptive_gains = imgaussfilt(adaptive_gains, filter_sigma, ...
-        'FilterSize', filter_size);
+    % ----------------------------------------------------------------
+    % 5. Amplitude-Modulated Leaky Integrator
+    % ----------------------------------------------------------------
 
-    % ----------------------------------------------------------------
-    % 5. EMA surface update (first-order IIR)
-    % ----------------------------------------------------------------
-    time_surface_map_raw = adaptive_gains .* masked_input ...
-        + (1 - adaptive_gains) .* time_surface_map_prev;
+    clamped_input = tanh(masked_input);
+
+    time_surface_map_raw = (adaptive_gains .* clamped_input) ...
+        + (adaptive_gains .* time_surface_map_prev);
 
     % ----------------------------------------------------------------
     % 6. Divisive normalization (Carandini-Heeger)
     % ----------------------------------------------------------------
     magnitude = abs(time_surface_map_raw);
-    activity_pool = imgaussfilt(magnitude, filter_sigma, ...
-        'FilterSize', filter_size);
-    counts_smooth = imgaussfilt(single(counts), filter_sigma, ...
-        'FilterSize', filter_size);
-        
     time_surface_map = zeros(size(masked_input));
-    good_mask = (magnitude > 0); 
-    
-    if any(good_mask(:))
-        % Calculate the dynamic median
-        dynamic_sigma = median(activity_pool(activity_pool > 0));
-        
-        % FIX: Define a baseline noise floor to prevent infinite gain.
-        % (You can tune this value between 0.01 and 0.1 depending on your sensor noise)
-        sigma_base = 0.5; 
-        
-        % Lock sigma to the baseline if the surface gets too quiet
-        if isnan(dynamic_sigma) || dynamic_sigma < sigma_base
-            sigma = sigma_base;
-        else
-            sigma = dynamic_sigma;
+
+    % Sanitize auxiliary data arrays to prevent denominator corruption
+    if any(outlier_mask(:))
+        % Calculate safe fallbacks (ignoring the outliers and empty space)
+        valid_counts = counts(~outlier_mask & counts > 0);
+        if ~isempty(valid_counts)
+            safe_count = median(valid_counts);
+            counts(outlier_mask) = safe_count;
         end
-        
-        time_surface_map(good_mask) = ...
-            time_surface_map_raw(good_mask) ./ ...
-            (sigma + counts_smooth(good_mask) .^ div_norm_exp);
+
+        % If magnitude is tracking separately prior to the surface update:
+        valid_mags = magnitude(~outlier_mask & magnitude > 0);
+        if ~isempty(valid_mags)
+            safe_mag = median(valid_mags);
+            magnitude(outlier_mask) = safe_mag;
+        end
     end
-    
-    % ----------------------------------------------------------------
-    % 8. Tone mapping for display
-    % ----------------------------------------------------------------
+
+    % Calculate the time surface map with divisive normalization
+    time_surface_map((magnitude > 0)) = ...
+        time_surface_map_raw((magnitude > 0)) ./ ...
+        (sigma_base + counts((magnitude > 0)) .^ div_norm_exp);
+
     % Bipolar surface mapped to [0, 1] via symmetric sigmoid.
     % Zero maps to 0.5 (mid-gray).
     normalized_output_frame = ...
         process.symmetricToneMappingNorm(time_surface_map, ...
         symmetric_tone_scale);
+
+    % Return LATS outputs
+    lats_outputs.normalized_output_frame = normalized_output_frame;
+    lats_outputs.time_surface_map = time_surface_map;
+    lats_outputs.magnitude = magnitude;
+    lats_outputs.adaptive_gains = adaptive_gains;
+    lats_outputs.time_surface_map_raw = time_surface_map_raw;
+    lats_outputs.clamped_input = clamped_input;
+    lats_outputs.tau_effective = tau_effective;
+    lats_outputs.tau_filtered = tau_filtered;
 
 end
 
